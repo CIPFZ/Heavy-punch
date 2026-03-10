@@ -34,9 +34,9 @@ Arduino + ESP32 + 双电机 + 三舵机（炮塔/炮管/开火）履带坦克控
 - ESP32 启动后创建 AP:
   - SSID: `ESP32_WiFi_Motion_Control`
   - Password: `12345678`
-  - IP: `192.168.1.4`
+  - IP: `192.168.4.1`
 - 手机连接 AP 后访问:
-  - `http://192.168.1.4`
+  - `http://192.168.4.1`
 
 ## Control Model
 - 双摇杆履带控制
@@ -66,6 +66,8 @@ Arduino + ESP32 + 双电机 + 三舵机（炮塔/炮管/开火）履带坦克控
   - `MOTOR_MIN_EFFECTIVE_PWM`
   - `TRACK_SLEW_STEP`
   - `TRACK_SIGNAL_TIMEOUT_MS`
+  - `LEFT_TRACK_GAIN_PERCENT`
+  - `RIGHT_TRACK_GAIN_PERCENT`
 - 舵机速度
   - `SERVO_UPDATE_INTERVAL_MS`
   - `TURRET_STEP_PER_TICK`

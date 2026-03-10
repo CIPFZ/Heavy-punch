@@ -35,8 +35,8 @@
 // Wi-Fi AP 配置
 const char *ap_ssid = "ESP32_WiFi_Motion_Control";
 const char *ap_password = "12345678";
-IPAddress local_IP(192, 168, 1, 4);
-IPAddress gateway(192, 168, 1, 1);
+IPAddress local_IP(192, 168, 4, 1);
+IPAddress gateway(192, 168, 4, 1);
 IPAddress subnet(255, 255, 255, 0);
 
 // HTTP 服务 + WebSocket 长连接
@@ -67,6 +67,8 @@ const int16_t MOTOR_MIN_EFFECTIVE_PWM = 85; // 电机起转补偿
 const uint8_t TRACK_SLEW_STEP = 12;         // 每次更新最大 PWM 变化，越小越平滑
 const uint16_t DRIVE_UPDATE_INTERVAL_MS = 15;
 const uint16_t TRACK_SIGNAL_TIMEOUT_MS = 350; // 摇杆信号超时自动停车
+const uint8_t LEFT_TRACK_GAIN_PERCENT = 100;  // 左履带校准系数
+const uint8_t RIGHT_TRACK_GAIN_PERCENT = 100; // 右履带校准系数
 
 // 舵机对象
 Servo turretServo;
@@ -449,8 +451,10 @@ const char index_html[] PROGMEM = R"rawliteral(
     }, { passive: false });
 
     const wsUrl = 'ws://' + location.hostname + '/ws';
+    const supportsPointerEvents = 'PointerEvent' in window;
     let ws = null;
     let reconnectTimer = null;
+    let reconnectAttempt = 0;
     let L = 0, R = 0, lastSent = '';
 
     const statusDot = document.getElementById('statusDot');
@@ -467,13 +471,31 @@ const char index_html[] PROGMEM = R"rawliteral(
     function connect() {
       if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) return;
       ws = new WebSocket(wsUrl);
-      ws.onopen = () => setLinkState(true);
+      ws.onopen = () => {
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer);
+          reconnectTimer = null;
+        }
+        reconnectAttempt = 0;
+        lastSent = '';
+        setLinkState(true);
+        sendTracks(true);
+      };
       ws.onclose = () => {
         setLinkState(false);
-        if (reconnectTimer) clearTimeout(reconnectTimer);
-        reconnectTimer = setTimeout(connect, 1200);
+        scheduleReconnect();
       };
-      ws.onerror = () => setLinkState(false);
+      ws.onerror = () => {
+        setLinkState(false);
+        try { ws.close(); } catch (_) {}
+      };
+    }
+
+    function scheduleReconnect() {
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectAttempt = Math.min(reconnectAttempt + 1, 6);
+      const delay = Math.min(1000 * reconnectAttempt, 4000);
+      reconnectTimer = setTimeout(connect, delay);
     }
 
     function send(msg) {
@@ -520,7 +542,8 @@ const char index_html[] PROGMEM = R"rawliteral(
       const stick = document.getElementById(id);
       if (!stick) return;
 
-      let dragging = false;
+      let pointerId = null;
+      let touchId = null;
 
       function setByY(clientY) {
         const r = stick.getBoundingClientRect();
@@ -544,32 +567,70 @@ const char index_html[] PROGMEM = R"rawliteral(
         sendTracks(true);
       }
 
-      // Pointer path
-      stick.addEventListener('pointerdown', e => {
-        dragging = true;
-        if (stick.setPointerCapture) {
-          try { stick.setPointerCapture(e.pointerId); } catch (_) {}
+      function findTrackedTouch(touchList) {
+        if (touchId === null || !touchList) return null;
+        for (const touch of touchList) {
+          if (touch.identifier === touchId) return touch;
         }
-        setByY(e.clientY);
-      });
-      stick.addEventListener('pointermove', e => { if (dragging) setByY(e.clientY); });
-      stick.addEventListener('pointerup', () => { dragging = false; resetStick(); });
-      stick.addEventListener('pointercancel', () => { dragging = false; resetStick(); });
-      stick.addEventListener('lostpointercapture', () => { dragging = false; resetStick(); });
+        return null;
+      }
 
-      // Touch fallback
+      if (supportsPointerEvents) {
+        stick.addEventListener('pointerdown', e => {
+          e.preventDefault();
+          pointerId = e.pointerId;
+          if (stick.setPointerCapture) {
+            try { stick.setPointerCapture(e.pointerId); } catch (_) {}
+          }
+          setByY(e.clientY);
+        });
+        stick.addEventListener('pointermove', e => {
+          if (pointerId !== e.pointerId) return;
+          setByY(e.clientY);
+        });
+        stick.addEventListener('pointerup', e => {
+          if (pointerId !== e.pointerId) return;
+          pointerId = null;
+          resetStick();
+        });
+        stick.addEventListener('pointercancel', e => {
+          if (pointerId !== e.pointerId) return;
+          pointerId = null;
+          resetStick();
+        });
+        stick.addEventListener('lostpointercapture', () => {
+          pointerId = null;
+          resetStick();
+        });
+        return;
+      }
+
       stick.addEventListener('touchstart', e => {
-        if (!e.touches || !e.touches[0]) return;
+        if (touchId !== null || !e.changedTouches || !e.changedTouches[0]) return;
         e.preventDefault();
-        setByY(e.touches[0].clientY);
+        touchId = e.changedTouches[0].identifier;
+        setByY(e.changedTouches[0].clientY);
       }, { passive: false });
       stick.addEventListener('touchmove', e => {
-        if (!e.touches || !e.touches[0]) return;
+        const touch = findTrackedTouch(e.touches);
+        if (!touch) return;
         e.preventDefault();
-        setByY(e.touches[0].clientY);
+        setByY(touch.clientY);
       }, { passive: false });
-      stick.addEventListener('touchend', e => { e.preventDefault(); resetStick(); }, { passive: false });
-      stick.addEventListener('touchcancel', e => { e.preventDefault(); resetStick(); }, { passive: false });
+      stick.addEventListener('touchend', e => {
+        const touch = findTrackedTouch(e.changedTouches);
+        if (!touch) return;
+        e.preventDefault();
+        touchId = null;
+        resetStick();
+      }, { passive: false });
+      stick.addEventListener('touchcancel', e => {
+        const touch = findTrackedTouch(e.changedTouches);
+        if (!touch) return;
+        e.preventDefault();
+        touchId = null;
+        resetStick();
+      }, { passive: false });
     }
 
     function bindHoldButton(id, startCmd, stopCmd) {
@@ -579,16 +640,18 @@ const char index_html[] PROGMEM = R"rawliteral(
       const start = e => { if (e) e.preventDefault(); send(startCmd); };
       const stop = e => { if (e) e.preventDefault(); send(stopCmd); };
 
-      el.addEventListener('pointerdown', start);
-      el.addEventListener('pointerup', stop);
-      el.addEventListener('pointercancel', stop);
-      el.addEventListener('lostpointercapture', stop);
-      el.addEventListener('pointerleave', e => { if (e.buttons === 1) stop(e); });
+      if (supportsPointerEvents) {
+        el.addEventListener('pointerdown', start);
+        el.addEventListener('pointerup', stop);
+        el.addEventListener('pointercancel', stop);
+        el.addEventListener('lostpointercapture', stop);
+        el.addEventListener('pointerleave', e => { if (e.buttons === 1) stop(e); });
+        return;
+      }
 
       el.addEventListener('touchstart', start, { passive: false });
       el.addEventListener('touchend', stop, { passive: false });
       el.addEventListener('touchcancel', stop, { passive: false });
-
       el.addEventListener('mousedown', start);
       el.addEventListener('mouseup', stop);
       el.addEventListener('mouseleave', e => { if (e.buttons === 1) stop(e); });
@@ -598,7 +661,10 @@ const char index_html[] PROGMEM = R"rawliteral(
       const el = document.getElementById(id);
       if (!el) return;
       const fire = e => { if (e) e.preventDefault(); send(id); };
-      el.addEventListener('pointerdown', fire);
+      if (supportsPointerEvents) {
+        el.addEventListener('pointerdown', fire);
+        return;
+      }
       el.addEventListener('touchstart', fire, { passive: false });
       el.addEventListener('mousedown', fire);
     }
@@ -630,7 +696,7 @@ const char index_html[] PROGMEM = R"rawliteral(
       bindSinglePress('fire');
       bindSinglePress('stop');
 
-      setInterval(() => sendTracks(true), 100);
+      setInterval(() => sendTracks(true), 120);
       window.addEventListener('blur', resetAll);
       document.addEventListener('visibilitychange', () => { if (document.hidden) resetAll(); });
       window.addEventListener('pagehide', resetAll);
@@ -730,6 +796,13 @@ int16_t approachWithStep(int16_t current, int16_t target, uint8_t step) {
   return current;
 }
 
+int16_t applyTrackGain(int16_t pwm, uint8_t gainPercent) {
+  int16_t sign = (pwm < 0) ? -1 : 1;
+  int32_t scaled = ((int32_t)abs(pwm) * gainPercent) / 100;
+  scaled = constrain(scaled, 0, PWM_MAX);
+  return sign * (int16_t)scaled;
+}
+
 void applyTrackOutput() {
   const uint32_t now = millis();
   if (now - lastDriveUpdateMs < DRIVE_UPDATE_INTERVAL_MS) {
@@ -792,8 +865,8 @@ bool parseTrackCommand(char *payload) {
   int16_t lPct = (int16_t)constrain((int)l, -100, 100);
   int16_t rPct = (int16_t)constrain((int)r, -100, 100);
 
-  leftTargetPwm = mapTrackPercentToPwm(lPct);
-  rightTargetPwm = mapTrackPercentToPwm(rPct);
+  leftTargetPwm = applyTrackGain(mapTrackPercentToPwm(lPct), LEFT_TRACK_GAIN_PERCENT);
+  rightTargetPwm = applyTrackGain(mapTrackPercentToPwm(rPct), RIGHT_TRACK_GAIN_PERCENT);
   lastTrackCmdMs = millis();
   return true;
 }
@@ -872,13 +945,16 @@ void onEvent(AsyncWebSocket *serverRef, AsyncWebSocketClient *client,
 }
 
 void initWiFiAP() {
-  if (!WiFi.softAP(ap_ssid, ap_password)) {
-    LOG_PRINTLN(F("AP failed to start"));
-    return;
-  }
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
 
   if (!WiFi.softAPConfig(local_IP, gateway, subnet)) {
     LOG_PRINTLN(F("Failed to set AP IP address"));
+    return;
+  }
+
+  if (!WiFi.softAP(ap_ssid, ap_password)) {
+    LOG_PRINTLN(F("AP failed to start"));
     return;
   }
 
