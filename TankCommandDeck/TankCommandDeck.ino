@@ -1,27 +1,26 @@
-﻿/*
- * WiFi Motion Core (ESP32 Tank Control)
- * Board: ESP32-S3
- * Libraries: ESPAsyncWebServer, AsyncTCP, ESP32Servo
+/*
+ * IronSight FPV Scout
+ * Board: ESP32-S3 N16R8
+ * Libraries: ESPAsyncWebServer, AsyncTCP, ESP32Servo, esp_camera
  *
- * 架构说明:
- * 1) ESP32 以 AP 模式提供热点 + HTTP 页面。
- * 2) 页面通过 WebSocket 发送文本命令。
- * 3) 采用双摇杆控制左右履带：tracks:<left_pct>:<right_pct>，范围 -100..100。
- * 4) 固件做死区/曲线/起步补偿/斜坡处理后输出 PWM。
- * 5) 开火动作使用 loop() 中非阻塞状态机复位。
+ * Architecture:
+ * 1) ESP32-S3 runs as a SoftAP and serves the control UI on port 80.
+ * 2) The UI talks to /ws for drive + pan/tilt control.
+ * 3) MJPEG video streaming runs on a dedicated HTTP server on port 81.
+ * 4) Track control retains deadzone, curve shaping and slew limiting.
  */
 
 #include <AsyncTCP.h>
 #include <ESP32Servo.h>
 #include <ESPAsyncWebServer.h>
 #include <WiFi.h>
+#include <esp_camera.h>
+#include <esp_http_server.h>
 #include <stdlib.h>
 #include <string.h>
 
 // ========== Build-time options ==========
-// 设为 0 可关闭串口调试日志（默认关闭，减少输出和干扰）
 #define ENABLE_DEBUG_LOG 0
-// 设为 0 可关闭上电舵机自检，缩短启动时间
 #define ENABLE_SERVO_SELF_TEST 1
 
 #if ENABLE_DEBUG_LOG
@@ -32,18 +31,19 @@
 #define LOG_PRINTF(...) ((void)0)
 #endif
 
-// Wi-Fi AP 配置
-const char *ap_ssid = "ESP32_WiFi_Motion_Control";
+// Wi-Fi AP config
+const char *ap_ssid = "IronSight_FPV_Scout";
 const char *ap_password = "12345678";
 IPAddress local_IP(192, 168, 4, 1);
 IPAddress gateway(192, 168, 4, 1);
 IPAddress subnet(255, 255, 255, 0);
 
-// HTTP 服务 + WebSocket 长连接
+// HTTP + WebSocket server
 AsyncWebServer server(80);
 AsyncWebSocket ws("/ws");
+httpd_handle_t stream_httpd = nullptr;
 
-// 电机驱动引脚（A=左履带，B=右履带）
+// Track motor pins (A=left, B=right)
 #define PWMA 5
 #define AIN2 6
 #define AIN1 7
@@ -51,60 +51,75 @@ AsyncWebSocket ws("/ws");
 #define BIN2 17
 #define BIN1 16
 
-// 舵机引脚（炮塔旋转 / 炮管俯仰 / 开火舵机）
-#define TURRET_SERVO_PIN 13
-#define BARREL_SERVO_PIN 12
-#define FIRE_SERVO_PIN 11
+// Pan / tilt servo pins
+#define PAN_SERVO_PIN 13
+#define TILT_SERVO_PIN 12
 
-// PWM 配置
+// OV2640 camera pin map for YD-ESP32-S3-COREBOARD V1.4
+#define CAM_PIN_PWDN 41
+#define CAM_PIN_RESET 42
+#define CAM_PIN_XCLK 15
+#define CAM_PIN_SIOD 9
+#define CAM_PIN_SIOC 8
+
+#define CAM_PIN_D7 40
+#define CAM_PIN_D6 39
+#define CAM_PIN_D5 38
+#define CAM_PIN_D4 11
+#define CAM_PIN_D3 10
+#define CAM_PIN_D2 4
+#define CAM_PIN_D1 2
+#define CAM_PIN_D0 1
+#define CAM_PIN_VSYNC 21
+#define CAM_PIN_HREF 47
+#define CAM_PIN_PCLK 14
+
+// PWM config
 const uint16_t PWM_FREQ = 5000;
 const uint8_t PWM_RESOLUTION = 8;
 const int16_t PWM_MAX = 255;
 
-// 摇杆到速度映射参数（你后续主要调这组）
-const int16_t JOYSTICK_DEADZONE = 8;        // 摇杆死区：防抖
-const int16_t MOTOR_MIN_EFFECTIVE_PWM = 85; // 电机起转补偿
-const uint8_t TRACK_SLEW_STEP = 12;         // 每次更新最大 PWM 变化，越小越平滑
+// Track tuning
+const int16_t JOYSTICK_DEADZONE = 8;
+const int16_t MOTOR_MIN_EFFECTIVE_PWM = 85;
+const uint8_t TRACK_SLEW_STEP = 12;
 const uint16_t DRIVE_UPDATE_INTERVAL_MS = 15;
-const uint16_t TRACK_SIGNAL_TIMEOUT_MS = 350; // 摇杆信号超时自动停车
-const uint8_t LEFT_TRACK_GAIN_PERCENT = 100;  // 左履带校准系数
-const uint8_t RIGHT_TRACK_GAIN_PERCENT = 100; // 右履带校准系数
+const uint16_t TRACK_SIGNAL_TIMEOUT_MS = 350;
+const uint8_t LEFT_TRACK_GAIN_PERCENT = 100;
+const uint8_t RIGHT_TRACK_GAIN_PERCENT = 100;
 
-// 舵机对象
-Servo turretServo;
-Servo barrelServo;
-Servo fireServo;
+// Servo objects
+Servo panServo;
+Servo tiltServo;
 
-// 舵机状态和角度限制
-int16_t turretAngle = 90;
-int16_t barrelAngle = 90;
-const int16_t TURRET_MIN = 10;
-const int16_t TURRET_MAX = 170;
-const int16_t BARREL_MIN = 70;
-const int16_t BARREL_MAX = 130;
-const int16_t FIRE_READY_POS = 90;
-const int16_t FIRE_TRIGGER_POS = 130;
+// Pan / tilt state
+int16_t panAngle = 90;
+int16_t tiltAngle = 95;
+const int16_t PAN_MIN = 10;
+const int16_t PAN_MAX = 170;
+const int16_t TILT_MIN = 60;
+const int16_t TILT_MAX = 135;
 const uint16_t SERVO_UPDATE_INTERVAL_MS = 20;
-const int16_t TURRET_STEP_PER_TICK = 2;
-const int16_t BARREL_STEP_PER_TICK = 1;
+const int16_t PAN_STEP_PER_TICK = 2;
+const int16_t TILT_STEP_PER_TICK = 1;
 
-// 非阻塞开火状态
-bool isFiring = false;
-uint32_t fireStartTime = 0;
-const uint32_t fireDuration = 500;
-
-// 履带目标/当前 PWM（带斜坡）
+// Track state
 int16_t leftTargetPwm = 0;
 int16_t rightTargetPwm = 0;
 int16_t leftCurrentPwm = 0;
 int16_t rightCurrentPwm = 0;
 uint32_t lastTrackCmdMs = 0;
 uint32_t lastDriveUpdateMs = 0;
-int8_t turretMoveDir = 0; // -1: right, +1: left
-int8_t barrelMoveDir = 0; // -1: up, +1: down
+int8_t panMoveDir = 0;
+int8_t tiltMoveDir = 0;
 uint32_t lastServoUpdateMs = 0;
 
-// 控制页面（存储在 Flash，减少 RAM 占用）
+// Stream tuning
+const framesize_t CAMERA_FRAME_SIZE = FRAMESIZE_QVGA;
+const int CAMERA_JPEG_QUALITY = 12;
+const int CAMERA_FB_COUNT = 2;
+
+// UI
 const char index_html[] PROGMEM = R"rawliteral(
 <!doctype html>
 <html>
@@ -113,333 +128,483 @@ const char index_html[] PROGMEM = R"rawliteral(
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=0, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <title>Tank Command</title>
+  <title>IronSight FPV Scout</title>
   <style>
     :root {
-      --bg-dark: #050505;
-      --panel-bg: rgba(15, 23, 42, 0.65);
-      --panel-border: rgba(56, 189, 248, 0.2);
-      --panel-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
-      --text-main: #f8fafc;
-      --text-muted: #94a3b8;
-      --accent-cyan: #22d3ee;
-      --accent-red: #ef4444;
-      --accent-orange: #f97316;
-      --accent-green: #10b981;
-      --stick-bg: #0f172a;
-      --stick-border: #1e293b;
-      --knob-gradient: linear-gradient(135deg, #38bdf8, #2563eb);
       --safe-top: env(safe-area-inset-top, 10px);
       --safe-bottom: env(safe-area-inset-bottom, 10px);
       --safe-left: env(safe-area-inset-left, 10px);
       --safe-right: env(safe-area-inset-right, 10px);
+      --hud-bg: rgba(5, 9, 14, 0.58);
+      --hud-border: rgba(72, 187, 255, 0.26);
+      --hud-text: #e8f6ff;
+      --muted: #8da4b8;
+      --accent: #38bdf8;
+      --ok: #22c55e;
+      --bad: #ef4444;
+      --panel-shadow: 0 18px 50px rgba(0, 0, 0, 0.38);
+      --stick-bg: rgba(8, 15, 25, 0.66);
+      --stick-stroke: rgba(255, 255, 255, 0.1);
+      --knob-fill: linear-gradient(180deg, #67e8f9, #2563eb);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
     html, body {
-      width: 100vw;
-      height: 100vh;
+      width: 100%;
+      height: 100%;
       overflow: hidden;
-      position: fixed;
-      font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-      background: var(--bg-dark);
-      background-image:
-        radial-gradient(circle at 10% 50%, rgba(56, 189, 248, 0.08), transparent 30%),
-        radial-gradient(circle at 90% 50%, rgba(59, 130, 246, 0.08), transparent 30%);
-      color: var(--text-main);
+      font-family: "Segoe UI", "PingFang SC", sans-serif;
+      background: #05070a;
+      color: var(--hud-text);
+      touch-action: none;
       -webkit-user-select: none;
       user-select: none;
-      -webkit-touch-callout: none;
       -webkit-tap-highlight-color: transparent;
-      touch-action: none;
     }
 
-    .glass {
-      background: var(--panel-bg);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      border: 1px solid var(--panel-border);
-      box-shadow: var(--panel-shadow);
-      border-radius: 12px;
+    body {
+      position: fixed;
+      inset: 0;
+    }
+
+    .video-shell {
+      position: absolute;
+      inset: 0;
+      background:
+        radial-gradient(circle at top, rgba(56, 189, 248, 0.2), transparent 30%),
+        linear-gradient(180deg, rgba(0, 0, 0, 0.14), rgba(0, 0, 0, 0.55));
+    }
+
+    .video-shell::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      background-image:
+        linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mix-blend-mode: screen;
+      opacity: 0.18;
+      pointer-events: none;
+    }
+
+    #stream {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      background: #020406;
+    }
+
+    .scanline {
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(180deg, transparent, rgba(56, 189, 248, 0.05), transparent);
+      animation: sweep 5s linear infinite;
+      pointer-events: none;
+    }
+
+    @keyframes sweep {
+      0% { transform: translateY(-100%); }
+      100% { transform: translateY(100%); }
     }
 
     .hud {
       position: absolute;
-      top: var(--safe-top);
-      left: var(--safe-left);
-      right: var(--safe-right);
-      z-index: 10;
+      inset: 0;
+      padding: calc(var(--safe-top) + 10px) calc(var(--safe-right) + 10px) calc(var(--safe-bottom) + 10px) calc(var(--safe-left) + 10px);
+      display: grid;
+      grid-template-columns: 1fr auto 1fr;
+      grid-template-rows: auto 1fr auto;
+      pointer-events: none;
+    }
+
+    .topbar {
+      grid-column: 1 / 4;
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      pointer-events: none;
+    }
+
+    .hud-card {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      border-radius: 16px;
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--panel-shadow);
+    }
+
+    .title-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .eyebrow {
+      font-size: 0.62rem;
+      color: var(--muted);
+      letter-spacing: 0.24em;
+      text-transform: uppercase;
+    }
+
+    .title {
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .status-wrap {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.75rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--bad);
+      box-shadow: 0 0 10px var(--bad);
+      flex: none;
+    }
+
+    .reticle {
+      grid-column: 2;
+      grid-row: 2;
+      place-self: center;
+      width: min(32vw, 180px);
+      height: min(32vw, 180px);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 50%;
+      position: relative;
+      pointer-events: none;
+      background: radial-gradient(circle, rgba(56, 189, 248, 0.07), transparent 65%);
+    }
+
+    .reticle::before,
+    .reticle::after {
+      content: "";
+      position: absolute;
+      background: rgba(255, 255, 255, 0.18);
+    }
+
+    .reticle::before {
+      left: 50%;
+      top: 12%;
+      bottom: 12%;
+      width: 1px;
+      transform: translateX(-50%);
+    }
+
+    .reticle::after {
+      top: 50%;
+      left: 12%;
+      right: 12%;
+      height: 1px;
+      transform: translateY(-50%);
+    }
+
+    .reticle-center {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      border: 2px solid rgba(56, 189, 248, 0.68);
+      transform: translate(-50%, -50%);
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.28);
+    }
+
+    .reticle-label {
+      position: absolute;
+      bottom: -28px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-size: 0.68rem;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: rgba(232, 246, 255, 0.72);
+      white-space: nowrap;
+    }
+
+    .control-side {
+      grid-row: 3;
+      align-self: end;
+      display: flex;
+      gap: 10px;
+      pointer-events: auto;
+    }
+
+    .control-left { grid-column: 1; justify-self: start; }
+    .control-right { grid-column: 3; justify-self: end; }
+
+    .panel {
+      background: var(--hud-bg);
+      border: 1px solid var(--hud-border);
+      backdrop-filter: blur(12px);
+      box-shadow: var(--panel-shadow);
+      border-radius: 18px;
+      padding: 10px;
+    }
+
+    .panel-head {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      padding: 8px 12px;
-      pointer-events: none;
-    }
-
-    .hud-pill {
-      background: rgba(0, 0, 0, 0.5);
-      border: 1px solid rgba(56, 189, 248, 0.3);
-      padding: 4px 10px;
-      border-radius: 20px;
-      font-size: 0.65rem;
-      font-weight: 700;
-      letter-spacing: 0.05em;
-      color: var(--accent-cyan);
-      display: flex;
-      align-items: center;
-      gap: 6px;
-      backdrop-filter: blur(4px);
-    }
-
-    .status-dot {
-      width: 6px;
-      height: 6px;
-      border-radius: 50%;
-      background-color: var(--accent-red);
-      box-shadow: 0 0 6px var(--accent-red);
-    }
-
-    .main-container {
-      display: flex;
-      width: 100%;
-      height: 100%;
-      padding: calc(var(--safe-top) + 36px) var(--safe-right) var(--safe-bottom) var(--safe-left);
-      gap: 12px;
-    }
-
-    .panel {
-      flex: 1;
-      display: flex;
-      flex-direction: column;
-      padding: 12px;
-      position: relative;
-      overflow: hidden;
-    }
-
-    .panel::before {
-      content: '';
-      position: absolute;
-      inset: 0;
-      background-image:
-        linear-gradient(rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-      background-size: 15px 15px;
-      pointer-events: none;
-      z-index: 0;
-    }
-
-    .panel-header {
-      position: relative;
-      z-index: 1;
       margin-bottom: 8px;
-      display: flex;
-      align-items: center;
-      gap: 6px;
-    }
-
-    .panel-header::before {
-      content: '';
-      width: 3px;
-      height: 12px;
-      background: var(--accent-cyan);
-      border-radius: 2px;
-    }
-
-    .panel-title {
-      font-size: 0.85rem;
-      font-weight: 700;
-      color: var(--accent-cyan);
+      font-size: 0.65rem;
+      color: var(--muted);
+      letter-spacing: 0.14em;
       text-transform: uppercase;
-      letter-spacing: 0.05em;
     }
 
-    .drive-section { flex: 1.1; }
-    .weapon-section { flex: 0.9; }
-
-    .sticks-container {
+    .sticks {
       display: flex;
-      justify-content: space-around;
-      align-items: center;
-      flex: 1;
-      z-index: 1;
-      position: relative;
+      gap: 10px;
     }
 
-    .stick-wrapper {
+    .stick-wrap {
+      width: clamp(92px, 18vw, 120px);
       display: flex;
       flex-direction: column;
       align-items: center;
       gap: 8px;
-      width: 45%;
-      height: 100%;
-      justify-content: center;
     }
 
-    .stick-label {
-      font-size: 0.65rem;
-      color: var(--text-muted);
-      font-weight: 700;
-      letter-spacing: 0.05em;
-    }
-
-    .stick-body {
+    .stick {
       position: relative;
-      width: clamp(50px, 12vw, 70px);
-      height: clamp(140px, 50vh, 200px);
+      width: 100%;
+      height: clamp(150px, 27vh, 230px);
       background: var(--stick-bg);
-      border: 1px solid var(--stick-border);
-      border-radius: 35px;
-      box-shadow: inset 0 6px 15px rgba(0, 0, 0, 0.6);
+      border: 1px solid var(--stick-stroke);
+      border-radius: 999px;
+      box-shadow: inset 0 6px 20px rgba(0, 0, 0, 0.48);
+      overflow: hidden;
       touch-action: none;
     }
 
-    .stick-center-line {
+    .stick::before {
+      content: "";
       position: absolute;
-      left: 20%;
-      right: 20%;
+      left: 22%;
+      right: 22%;
       top: 50%;
+      height: 1px;
       transform: translateY(-50%);
-      height: 2px;
-      background: rgba(255, 255, 255, 0.1);
-      border-radius: 1px;
+      background: rgba(255, 255, 255, 0.12);
     }
 
     .stick-knob {
       position: absolute;
       left: 50%;
       top: 50%;
+      width: clamp(56px, 11vw, 68px);
+      height: clamp(56px, 11vw, 68px);
       transform: translate(-50%, -50%);
-      width: clamp(40px, 10vw, 56px);
-      height: clamp(40px, 10vw, 56px);
-      background: var(--knob-gradient);
       border-radius: 50%;
-      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5), inset 0 2px 4px rgba(255, 255, 255, 0.2);
-      border: 1px solid rgba(255, 255, 255, 0.1);
+      background: var(--knob-fill);
+      border: 1px solid rgba(255, 255, 255, 0.22);
+      box-shadow: 0 10px 20px rgba(0, 0, 0, 0.42), inset 0 3px 6px rgba(255, 255, 255, 0.24);
     }
 
-    .stick-readout {
+    .stick-meta {
+      width: 100%;
       display: flex;
-      flex-direction: column;
+      justify-content: space-between;
       align-items: center;
-      width: 80%;
-      gap: 4px;
+      font-size: 0.72rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
     }
 
-    .stick-value {
-      font-size: 0.9rem;
+    .stick-val {
+      color: var(--accent);
       font-weight: 700;
       font-variant-numeric: tabular-nums;
-      color: var(--accent-cyan);
     }
 
-    .meter-bg {
-      width: 100%;
-      height: 4px;
-      background: rgba(0, 0, 0, 0.6);
-      border-radius: 2px;
-      position: relative;
-    }
-
-    .meter-fill {
-      position: absolute;
-      left: 50%;
-      top: 0;
-      bottom: 0;
-      width: 0%;
-      background: var(--accent-green);
-      transition: width 0.08s ease, left 0.08s ease, background-color 0.08s ease;
-    }
-
-    .controls-grid {
+    .gimbal-grid {
+      width: clamp(156px, 22vw, 220px);
       display: grid;
       grid-template-columns: repeat(3, 1fr);
-      grid-template-rows: repeat(2, 1fr);
+      grid-template-rows: repeat(4, auto);
       gap: 8px;
-      height: 100%;
-      flex: 1;
-      z-index: 1;
-      position: relative;
     }
 
     .btn {
-      background: rgba(30, 41, 59, 0.7);
-      border: 1px solid rgba(255, 255, 255, 0.1);
-      border-radius: 10px;
-      color: var(--text-main);
-      font-size: 0.7rem;
-      font-weight: 600;
+      min-height: 58px;
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 16px;
+      background: rgba(10, 16, 24, 0.72);
+      color: var(--hud-text);
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
       display: flex;
-      flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 4px;
       touch-action: manipulation;
-      position: relative;
-      overflow: hidden;
     }
 
-    .btn:active { background: rgba(51, 65, 85, 0.9); }
-    .btn-turret:active, .btn-barrel:active { color: var(--accent-cyan); border-color: var(--accent-cyan); }
-
-    .btn-icon { font-size: 1.1rem; }
-
-    .btn-fire {
-      background: linear-gradient(135deg, rgba(220, 38, 38, 0.8), rgba(153, 27, 27, 0.9));
-      border-color: rgba(248, 113, 113, 0.4);
-      grid-row: span 2;
-    }
-
-    .btn-fire .btn-icon { font-size: 1.8rem; color: #fca5a5; }
-
+    .btn:active { background: rgba(24, 35, 49, 0.92); }
+    .btn-primary:active { color: var(--accent); border-color: rgba(56, 189, 248, 0.7); }
     .btn-stop {
-      grid-column: span 3;
-      background: linear-gradient(135deg, rgba(234, 88, 12, 0.8), rgba(194, 65, 12, 0.9));
-      border-color: rgba(253, 186, 116, 0.4);
-      font-size: 0.85rem;
-      letter-spacing: 0.05em;
-      padding: 4px;
+      background: linear-gradient(180deg, rgba(249, 115, 22, 0.88), rgba(194, 65, 12, 0.96));
+      border-color: rgba(253, 186, 116, 0.45);
+      color: white;
     }
+    .btn-center {
+      background: linear-gradient(180deg, rgba(2, 132, 199, 0.84), rgba(3, 105, 161, 0.96));
+      border-color: rgba(125, 211, 252, 0.4);
+    }
+
+    .metric-stack {
+      display: flex;
+      gap: 8px;
+      align-items: stretch;
+      pointer-events: none;
+    }
+
+    .metric {
+      min-width: 98px;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      padding: 8px 10px;
+      border-radius: 16px;
+      background: rgba(5, 9, 14, 0.44);
+      border: 1px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .metric-k {
+      font-size: 0.62rem;
+      color: var(--muted);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+
+    .metric-v {
+      font-size: 0.95rem;
+      font-weight: 700;
+      color: var(--accent);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .offline {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      text-align: center;
+      padding: 20px;
+      color: rgba(232, 246, 255, 0.72);
+      font-size: 0.85rem;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      background: rgba(0, 0, 0, 0.36);
+      pointer-events: none;
+    }
+
+    .offline.hidden { display: none; }
 
     @media (orientation: portrait) {
-      .main-container { flex-direction: column; padding-top: calc(var(--safe-top) + 44px); }
-      .drive-section, .weapon-section { flex: none; height: 45vh; }
-      .weapon-section { height: 35vh; }
+      .hud {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr auto auto;
+      }
+
+      .topbar { grid-column: 1; }
+      .reticle { grid-column: 1; grid-row: 2; width: min(44vw, 180px); height: min(44vw, 180px); }
+      .control-left,
+      .control-right {
+        grid-column: 1;
+        justify-self: center;
+      }
+      .control-left { grid-row: 3; }
+      .control-right { grid-row: 4; }
     }
   </style>
 </head>
 <body>
-  <div class="hud">
-    <div class="hud-pill"><span id="statusDot" class="status-dot"></span><span id="linkLabel">LINK LOST</span></div>
-    <div class="hud-pill" style="color: var(--text-muted); border-color: rgba(255,255,255,0.1);">ESP32</div>
+  <div class="video-shell">
+    <img id="stream" alt="FPV stream">
+    <div class="scanline"></div>
+    <div id="streamOffline" class="offline">Video Link Pending</div>
   </div>
 
-  <div class="main-container">
-    <div class="panel glass drive-section">
-      <div class="panel-header"><div class="panel-title">Mobility Drive</div></div>
-      <div class="sticks-container">
-        <div class="stick-wrapper">
-          <div class="stick-label">L-TRACK</div>
-          <div id="stickL" class="stick-body"><div class="stick-center-line"></div><div id="knobL" class="stick-knob"></div></div>
-          <div class="stick-readout"><div id="valL" class="stick-value">0%</div><div class="meter-bg"><div id="fillL" class="meter-fill"></div></div></div>
+  <div class="hud">
+    <div class="topbar">
+      <div class="hud-card">
+        <div class="title-stack">
+          <div class="eyebrow">IronSight Vehicle</div>
+          <div class="title">FPV Scout Deck</div>
         </div>
-        <div class="stick-wrapper">
-          <div class="stick-label">R-TRACK</div>
-          <div id="stickR" class="stick-body"><div class="stick-center-line"></div><div id="knobR" class="stick-knob"></div></div>
-          <div class="stick-readout"><div id="valR" class="stick-value">0%</div><div class="meter-bg"><div id="fillR" class="meter-fill"></div></div></div>
+      </div>
+
+      <div class="metric-stack">
+        <div class="metric">
+          <div class="metric-k">Left Track</div>
+          <div id="leftMetric" class="metric-v">0%</div>
+        </div>
+        <div class="metric">
+          <div class="metric-k">Right Track</div>
+          <div id="rightMetric" class="metric-v">0%</div>
+        </div>
+      </div>
+
+      <div class="hud-card">
+        <div class="status-wrap"><span id="statusDot" class="dot"></span><span id="linkLabel">Link Lost</span></div>
+      </div>
+    </div>
+
+    <div class="reticle">
+      <div class="reticle-center"></div>
+      <div class="reticle-label">Local Recon Feed</div>
+    </div>
+
+    <div class="control-side control-left">
+      <div class="panel">
+        <div class="panel-head"><span>Mobility</span><span>Tracks</span></div>
+        <div class="sticks">
+          <div class="stick-wrap">
+            <div id="stickL" class="stick"><div id="knobL" class="stick-knob"></div></div>
+            <div class="stick-meta"><span>L-Track</span><span id="valL" class="stick-val">0%</span></div>
+          </div>
+          <div class="stick-wrap">
+            <div id="stickR" class="stick"><div id="knobR" class="stick-knob"></div></div>
+            <div class="stick-meta"><span>R-Track</span><span id="valR" class="stick-val">0%</span></div>
+          </div>
         </div>
       </div>
     </div>
 
-    <div class="panel glass weapon-section">
-      <div class="panel-header"><div class="panel-title">Tactical</div></div>
-      <div class="controls-grid">
-        <button class="btn btn-turret" id="turret_left"><span class="btn-icon">&#x21BA;</span><span>TURRET L</span></button>
-        <button class="btn btn-barrel" id="barrel_up"><span class="btn-icon">&#x2191;</span><span>ELEVATE</span></button>
-        <button class="btn btn-fire" id="fire"><span class="btn-icon">&#x1F4A5;</span><span style="font-size:0.8rem">FIRE</span></button>
-        <button class="btn btn-turret" id="turret_right"><span class="btn-icon">&#x21BB;</span><span>TURRET R</span></button>
-        <button class="btn btn-barrel" id="barrel_down"><span class="btn-icon">&#x2193;</span><span>DEPRESS</span></button>
-        <button class="btn btn-stop" id="stop">&#x26A0; E-STOP</button>
+    <div class="control-side control-right">
+      <div class="panel">
+        <div class="panel-head"><span>Camera Gimbal</span><span>Pan / Tilt</span></div>
+        <div class="gimbal-grid">
+          <button class="btn btn-primary" style="grid-column:2;grid-row:1" id="tilt_up">Tilt Up</button>
+          <button class="btn btn-primary" style="grid-column:1;grid-row:2" id="pan_left">Pan Left</button>
+          <button class="btn btn-center" style="grid-column:2;grid-row:2" id="center_view">Center</button>
+          <button class="btn btn-primary" style="grid-column:3;grid-row:2" id="pan_right">Pan Right</button>
+          <button class="btn btn-primary" style="grid-column:2;grid-row:3" id="tilt_down">Tilt Down</button>
+          <button class="btn btn-stop" style="grid-column:1 / 4;grid-row:4" id="stop">E-Stop</button>
+        </div>
       </div>
     </div>
   </div>
@@ -451,21 +616,46 @@ const char index_html[] PROGMEM = R"rawliteral(
     }, { passive: false });
 
     const wsUrl = 'ws://' + location.hostname + '/ws';
+    const streamUrl = 'http://' + location.hostname + ':81/stream';
     const supportsPointerEvents = 'PointerEvent' in window;
     let ws = null;
     let reconnectTimer = null;
     let reconnectAttempt = 0;
-    let L = 0, R = 0, lastSent = '';
+    let streamRetryTimer = null;
+    let L = 0;
+    let R = 0;
+    let lastSent = '';
 
     const statusDot = document.getElementById('statusDot');
     const linkLabel = document.getElementById('linkLabel');
+    const streamImg = document.getElementById('stream');
+    const streamOffline = document.getElementById('streamOffline');
+    const leftMetric = document.getElementById('leftMetric');
+    const rightMetric = document.getElementById('rightMetric');
 
     function setLinkState(connected) {
-      if (linkLabel) linkLabel.textContent = connected ? 'LINK ACTIVE' : 'LINK LOST';
+      if (linkLabel) linkLabel.textContent = connected ? 'Link Active' : 'Link Lost';
       if (statusDot) {
-        statusDot.style.backgroundColor = connected ? 'var(--accent-green)' : 'var(--accent-red)';
-        statusDot.style.boxShadow = connected ? '0 0 6px var(--accent-green)' : '0 0 6px var(--accent-red)';
+        statusDot.style.backgroundColor = connected ? 'var(--ok)' : 'var(--bad)';
+        statusDot.style.boxShadow = connected ? '0 0 10px var(--ok)' : '0 0 10px var(--bad)';
       }
+    }
+
+    function refreshVideo() {
+      if (streamRetryTimer) {
+        clearTimeout(streamRetryTimer);
+        streamRetryTimer = null;
+      }
+      if (streamOffline) streamOffline.classList.remove('hidden');
+      if (streamImg) {
+        const nonce = Date.now();
+        streamImg.src = streamUrl + '?t=' + nonce;
+      }
+    }
+
+    function scheduleVideoRetry() {
+      if (streamRetryTimer) clearTimeout(streamRetryTimer);
+      streamRetryTimer = setTimeout(refreshVideo, 1200);
     }
 
     function connect() {
@@ -516,26 +706,17 @@ const char index_html[] PROGMEM = R"rawliteral(
       const stick = document.getElementById(side === 'L' ? 'stickL' : 'stickR');
       const knob = document.getElementById(side === 'L' ? 'knobL' : 'knobR');
       const txt = document.getElementById(side === 'L' ? 'valL' : 'valR');
-      const fill = document.getElementById(side === 'L' ? 'fillL' : 'fillR');
-      if (!stick || !knob || !txt || !fill) return;
+      if (!stick || !knob || !txt) return;
 
       const h = stick.clientHeight;
       const kh = knob.clientHeight;
       const mid = (h - kh) / 2;
       const yOffset = -(val / 100) * mid;
-
       knob.style.top = 'calc(50% + ' + yOffset + 'px)';
       txt.textContent = val + '%';
 
-      const absVal = Math.abs(val);
-      fill.style.width = (absVal / 2) + '%';
-      if (val >= 0) {
-        fill.style.left = '50%';
-        fill.style.backgroundColor = 'var(--accent-green)';
-      } else {
-        fill.style.left = (50 - (absVal / 2)) + '%';
-        fill.style.backgroundColor = 'var(--accent-orange)';
-      }
+      if (side === 'L' && leftMetric) leftMetric.textContent = val + '%';
+      if (side === 'R' && rightMetric) rightMetric.textContent = val + '%';
     }
 
     function bindStick(id, side) {
@@ -657,10 +838,10 @@ const char index_html[] PROGMEM = R"rawliteral(
       el.addEventListener('mouseleave', e => { if (e.buttons === 1) stop(e); });
     }
 
-    function bindSinglePress(id) {
+    function bindSinglePress(id, command) {
       const el = document.getElementById(id);
       if (!el) return;
-      const fire = e => { if (e) e.preventDefault(); send(id); };
+      const fire = e => { if (e) e.preventDefault(); send(command); };
       if (supportsPointerEvents) {
         el.addEventListener('pointerdown', fire);
         return;
@@ -670,43 +851,57 @@ const char index_html[] PROGMEM = R"rawliteral(
     }
 
     function resetAll() {
-      L = 0; R = 0;
-      draw('L', 0); draw('R', 0);
+      L = 0;
+      R = 0;
+      draw('L', 0);
+      draw('R', 0);
       sendTracks(true);
       send('stop');
-      send('turret_stop');
-      send('barrel_stop');
+      send('pan_stop');
+      send('tilt_stop');
     }
 
     document.addEventListener('DOMContentLoaded', () => {
       setLinkState(false);
-      connect();
-
       draw('L', 0);
       draw('R', 0);
-
       bindStick('stickL', 'L');
       bindStick('stickR', 'R');
 
-      bindHoldButton('turret_left', 'turret_left_start', 'turret_stop');
-      bindHoldButton('turret_right', 'turret_right_start', 'turret_stop');
-      bindHoldButton('barrel_up', 'barrel_up_start', 'barrel_stop');
-      bindHoldButton('barrel_down', 'barrel_down_start', 'barrel_stop');
+      bindHoldButton('pan_left', 'pan_left_start', 'pan_stop');
+      bindHoldButton('pan_right', 'pan_right_start', 'pan_stop');
+      bindHoldButton('tilt_up', 'tilt_up_start', 'tilt_stop');
+      bindHoldButton('tilt_down', 'tilt_down_start', 'tilt_stop');
+      bindSinglePress('center_view', 'center_view');
+      bindSinglePress('stop', 'stop');
 
-      bindSinglePress('fire');
-      bindSinglePress('stop');
+      connect();
+      refreshVideo();
 
       setInterval(() => sendTracks(true), 120);
       window.addEventListener('blur', resetAll);
       document.addEventListener('visibilitychange', () => { if (document.hidden) resetAll(); });
       window.addEventListener('pagehide', resetAll);
+
+      if (streamImg) {
+        streamImg.addEventListener('load', () => {
+          if (streamOffline) streamOffline.classList.add('hidden');
+        });
+        streamImg.addEventListener('error', () => {
+          if (streamOffline) streamOffline.classList.remove('hidden');
+          scheduleVideoRetry();
+        });
+      }
     });
   </script>
 </body>
 </html>
 )rawliteral";
 
-// 电机A运动控制（左履带）：speed > 0 前进，speed < 0 后退
+static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=frame";
+static const char *STREAM_BOUNDARY = "\r\n--frame\r\n";
+static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\n\r\n";
+
 void motorA_Move(int16_t speed) {
   speed = constrain(speed, -PWM_MAX, PWM_MAX);
   if (speed > 0) {
@@ -722,7 +917,6 @@ void motorA_Move(int16_t speed) {
   ledcWrite(PWMA, abs(speed));
 }
 
-// 电机B运动控制（右履带）
 void motorB_Move(int16_t speed) {
   speed = constrain(speed, -PWM_MAX, PWM_MAX);
   if (speed > 0) {
@@ -757,12 +951,19 @@ void stopAllMotion() {
   rightTargetPwm = 0;
   leftCurrentPwm = 0;
   rightCurrentPwm = 0;
-  turretMoveDir = 0;
-  barrelMoveDir = 0;
+  panMoveDir = 0;
+  tiltMoveDir = 0;
 }
 
-// 把摇杆百分比 (-100..100) 映射到有手感的 PWM：
-// 1) 死区去抖 2) 二次曲线细化低速 3) 起步补偿克服静摩擦
+void centerView() {
+  panMoveDir = 0;
+  tiltMoveDir = 0;
+  panAngle = 90;
+  tiltAngle = 95;
+  panServo.write(panAngle);
+  tiltServo.write(tiltAngle);
+}
+
 int16_t mapTrackPercentToPwm(int16_t pct) {
   pct = constrain(pct, -100, 100);
   int16_t sign = (pct < 0) ? -1 : 1;
@@ -774,12 +975,9 @@ int16_t mapTrackPercentToPwm(int16_t pct) {
 
   int16_t linear = (int16_t)(((int32_t)(ap - JOYSTICK_DEADZONE) * 100) /
                              (100 - JOYSTICK_DEADZONE));
-  int16_t curved =
-      (int16_t)(((int32_t)linear * linear) / 100); // quadratic curve
-
-  int16_t pwm =
-      MOTOR_MIN_EFFECTIVE_PWM +
-      (int16_t)(((int32_t)(PWM_MAX - MOTOR_MIN_EFFECTIVE_PWM) * curved) / 100);
+  int16_t curved = (int16_t)(((int32_t)linear * linear) / 100);
+  int16_t pwm = MOTOR_MIN_EFFECTIVE_PWM +
+                (int16_t)(((int32_t)(PWM_MAX - MOTOR_MIN_EFFECTIVE_PWM) * curved) / 100);
   pwm = constrain(pwm, 0, PWM_MAX);
   return sign * pwm;
 }
@@ -815,10 +1013,8 @@ void applyTrackOutput() {
     rightTargetPwm = 0;
   }
 
-  leftCurrentPwm =
-      approachWithStep(leftCurrentPwm, leftTargetPwm, TRACK_SLEW_STEP);
-  rightCurrentPwm =
-      approachWithStep(rightCurrentPwm, rightTargetPwm, TRACK_SLEW_STEP);
+  leftCurrentPwm = approachWithStep(leftCurrentPwm, leftTargetPwm, TRACK_SLEW_STEP);
+  rightCurrentPwm = approachWithStep(rightCurrentPwm, rightTargetPwm, TRACK_SLEW_STEP);
 
   motorA_Move(leftCurrentPwm);
   motorB_Move(rightCurrentPwm);
@@ -831,21 +1027,18 @@ void applyServoMotion() {
   }
   lastServoUpdateMs = now;
 
-  if (turretMoveDir != 0) {
-    turretAngle = constrain(turretAngle + turretMoveDir * TURRET_STEP_PER_TICK,
-                            TURRET_MIN, TURRET_MAX);
-    turretServo.write(turretAngle);
+  if (panMoveDir != 0) {
+    panAngle = constrain(panAngle + panMoveDir * PAN_STEP_PER_TICK, PAN_MIN, PAN_MAX);
+    panServo.write(panAngle);
   }
 
-  if (barrelMoveDir != 0) {
-    barrelAngle = constrain(barrelAngle + barrelMoveDir * BARREL_STEP_PER_TICK,
-                            BARREL_MIN, BARREL_MAX);
-    barrelServo.write(barrelAngle);
+  if (tiltMoveDir != 0) {
+    tiltAngle = constrain(tiltAngle + tiltMoveDir * TILT_STEP_PER_TICK, TILT_MIN, TILT_MAX);
+    tiltServo.write(tiltAngle);
   }
 }
 
 bool parseTrackCommand(char *payload) {
-  // 格式: "<left>:<right>"，例如 "35:-60"
   char *mid = strchr(payload, ':');
   if (mid == nullptr) {
     return false;
@@ -854,7 +1047,6 @@ bool parseTrackCommand(char *payload) {
   *mid = '\0';
   char *end1 = nullptr;
   char *end2 = nullptr;
-
   long l = strtol(payload, &end1, 10);
   long r = strtol(mid + 1, &end2, 10);
 
@@ -871,12 +1063,140 @@ bool parseTrackCommand(char *payload) {
   return true;
 }
 
-// WebSocket 事件回调
-// 文本命令:
-// tracks:<left_pct>:<right_pct>
-// turret_left_start/turret_right_start/turret_stop
-// barrel_up_start/barrel_down_start/barrel_stop
-// fire/stop
+esp_err_t jpg_handler(httpd_req_t *req) {
+  camera_fb_t *fb = esp_camera_fb_get();
+  if (!fb) {
+    httpd_resp_send_500(req);
+    return ESP_FAIL;
+  }
+
+  httpd_resp_set_type(req, "image/jpeg");
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
+  esp_err_t res = httpd_resp_send(req, (const char *)fb->buf, fb->len);
+  esp_camera_fb_return(fb);
+  return res;
+}
+
+esp_err_t stream_handler(httpd_req_t *req) {
+  camera_fb_t *fb = nullptr;
+  esp_err_t res = httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
+  if (res != ESP_OK) {
+    return res;
+  }
+
+  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  httpd_resp_set_hdr(req, "Pragma", "no-cache");
+
+  char part_buf[64];
+
+  while (true) {
+    fb = esp_camera_fb_get();
+    if (!fb) {
+      LOG_PRINTLN(F("Camera frame capture failed"));
+      res = ESP_FAIL;
+    } else {
+      res = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
+      if (res == ESP_OK) {
+        size_t hlen = (size_t)snprintf(part_buf, sizeof(part_buf), STREAM_PART, fb->len);
+        res = httpd_resp_send_chunk(req, part_buf, hlen);
+      }
+      if (res == ESP_OK) {
+        res = httpd_resp_send_chunk(req, (const char *)fb->buf, fb->len);
+      }
+      esp_camera_fb_return(fb);
+      fb = nullptr;
+    }
+
+    if (res != ESP_OK) {
+      break;
+    }
+  }
+
+  if (fb) {
+    esp_camera_fb_return(fb);
+  }
+  return res;
+}
+
+void startCameraStreamServer() {
+  httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+  config.server_port = 81;
+  config.ctrl_port = 32768;
+  config.max_open_sockets = 2;
+  config.stack_size = 8192;
+
+  httpd_uri_t stream_uri = {
+      .uri = "/stream",
+      .method = HTTP_GET,
+      .handler = stream_handler,
+      .user_ctx = nullptr,
+  };
+
+  httpd_uri_t jpg_uri = {
+      .uri = "/capture.jpg",
+      .method = HTTP_GET,
+      .handler = jpg_handler,
+      .user_ctx = nullptr,
+  };
+
+  if (httpd_start(&stream_httpd, &config) == ESP_OK) {
+    httpd_register_uri_handler(stream_httpd, &stream_uri);
+    httpd_register_uri_handler(stream_httpd, &jpg_uri);
+    LOG_PRINTLN(F("Camera stream server started on :81"));
+  } else {
+    LOG_PRINTLN(F("Failed to start camera stream server"));
+  }
+}
+
+bool initCamera() {
+  camera_config_t config;
+  memset(&config, 0, sizeof(config));
+  config.ledc_channel = LEDC_CHANNEL_0;
+  config.ledc_timer = LEDC_TIMER_0;
+  config.pin_d0 = CAM_PIN_D0;
+  config.pin_d1 = CAM_PIN_D1;
+  config.pin_d2 = CAM_PIN_D2;
+  config.pin_d3 = CAM_PIN_D3;
+  config.pin_d4 = CAM_PIN_D4;
+  config.pin_d5 = CAM_PIN_D5;
+  config.pin_d6 = CAM_PIN_D6;
+  config.pin_d7 = CAM_PIN_D7;
+  config.pin_xclk = CAM_PIN_XCLK;
+  config.pin_pclk = CAM_PIN_PCLK;
+  config.pin_vsync = CAM_PIN_VSYNC;
+  config.pin_href = CAM_PIN_HREF;
+  config.pin_sccb_sda = CAM_PIN_SIOD;
+  config.pin_sccb_scl = CAM_PIN_SIOC;
+  config.pin_pwdn = CAM_PIN_PWDN;
+  config.pin_reset = CAM_PIN_RESET;
+  config.xclk_freq_hz = 20000000;
+  config.frame_size = CAMERA_FRAME_SIZE;
+  config.pixel_format = PIXFORMAT_JPEG;
+  config.grab_mode = CAMERA_GRAB_LATEST;
+  config.fb_location = CAMERA_FB_IN_PSRAM;
+  config.jpeg_quality = CAMERA_JPEG_QUALITY;
+  config.fb_count = psramFound() ? CAMERA_FB_COUNT : 1;
+
+  esp_err_t err = esp_camera_init(&config);
+  if (err != ESP_OK) {
+    LOG_PRINTF("Camera init failed: 0x%x\n", err);
+    return false;
+  }
+
+  sensor_t *sensor = esp_camera_sensor_get();
+  if (sensor != nullptr) {
+    sensor->set_vflip(sensor, 0);
+    sensor->set_hmirror(sensor, 0);
+    sensor->set_brightness(sensor, 0);
+    sensor->set_saturation(sensor, 0);
+  }
+
+  LOG_PRINTLN(F("Camera initialized"));
+  return true;
+}
+
 void onEvent(AsyncWebSocket *serverRef, AsyncWebSocketClient *client,
              AwsEventType type, void *arg, uint8_t *data, size_t len) {
   (void)serverRef;
@@ -899,7 +1219,6 @@ void onEvent(AsyncWebSocket *serverRef, AsyncWebSocketClient *client,
       return;
     }
 
-    // 避免 String 动态分配，使用定长栈缓冲区
     if (len == 0 || len >= 48) {
       return;
     }
@@ -915,25 +1234,20 @@ void onEvent(AsyncWebSocket *serverRef, AsyncWebSocketClient *client,
 
     if (strcmp(msg, "stop") == 0) {
       stopAllMotion();
-    } else if (strcmp(msg, "turret_left_start") == 0) {
-      turretMoveDir = +1;
-    } else if (strcmp(msg, "turret_right_start") == 0) {
-      turretMoveDir = -1;
-    } else if (strcmp(msg, "turret_stop") == 0) {
-      turretMoveDir = 0;
-    } else if (strcmp(msg, "barrel_up_start") == 0) {
-      barrelMoveDir = -1;
-    } else if (strcmp(msg, "barrel_down_start") == 0) {
-      barrelMoveDir = +1;
-    } else if (strcmp(msg, "barrel_stop") == 0) {
-      barrelMoveDir = 0;
-    } else if (strcmp(msg, "fire") == 0) {
-      if (!isFiring) {
-        isFiring = true;
-        fireStartTime = millis();
-        fireServo.write(FIRE_TRIGGER_POS);
-        LOG_PRINTLN(F("Fire triggered"));
-      }
+    } else if (strcmp(msg, "center_view") == 0) {
+      centerView();
+    } else if (strcmp(msg, "pan_left_start") == 0 || strcmp(msg, "turret_left_start") == 0) {
+      panMoveDir = +1;
+    } else if (strcmp(msg, "pan_right_start") == 0 || strcmp(msg, "turret_right_start") == 0) {
+      panMoveDir = -1;
+    } else if (strcmp(msg, "pan_stop") == 0 || strcmp(msg, "turret_stop") == 0) {
+      panMoveDir = 0;
+    } else if (strcmp(msg, "tilt_up_start") == 0 || strcmp(msg, "barrel_up_start") == 0) {
+      tiltMoveDir = -1;
+    } else if (strcmp(msg, "tilt_down_start") == 0 || strcmp(msg, "barrel_down_start") == 0) {
+      tiltMoveDir = +1;
+    } else if (strcmp(msg, "tilt_stop") == 0 || strcmp(msg, "barrel_stop") == 0) {
+      tiltMoveDir = 0;
     }
     break;
   }
@@ -966,27 +1280,19 @@ void initWiFiAP() {
 void setup() {
   Serial.begin(115200);
 
-  turretServo.attach(TURRET_SERVO_PIN, 500, 2400);
-  barrelServo.attach(BARREL_SERVO_PIN, 500, 2400);
-  fireServo.attach(FIRE_SERVO_PIN, 500, 2400);
-
-  turretServo.write(turretAngle);
-  barrelServo.write(barrelAngle);
-  fireServo.write(FIRE_READY_POS);
+  panServo.attach(PAN_SERVO_PIN, 500, 2400);
+  tiltServo.attach(TILT_SERVO_PIN, 500, 2400);
+  centerView();
 
   if (ENABLE_SERVO_SELF_TEST) {
-    delay(1000);
-    turretServo.write(TURRET_MIN);
-    barrelServo.write(BARREL_MIN);
-    fireServo.write(FIRE_TRIGGER_POS);
     delay(700);
-    turretServo.write(TURRET_MAX);
-    barrelServo.write(BARREL_MAX);
-    fireServo.write(FIRE_READY_POS);
-    delay(700);
-    turretServo.write(turretAngle);
-    barrelServo.write(barrelAngle);
-    fireServo.write(FIRE_READY_POS);
+    panServo.write(PAN_MIN);
+    tiltServo.write(TILT_MIN);
+    delay(450);
+    panServo.write(PAN_MAX);
+    tiltServo.write(TILT_MAX);
+    delay(450);
+    centerView();
   }
 
   pinMode(AIN1, OUTPUT);
@@ -999,11 +1305,16 @@ void setup() {
   stopAllMotion();
 
   initWiFiAP();
+  initCamera();
+  startCameraStreamServer();
 
   ws.onEvent(onEvent);
   server.addHandler(&ws);
   server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
     request->send_P(200, "text/html", index_html);
+  });
+  server.on("/health", HTTP_GET, [](AsyncWebServerRequest *request) {
+    request->send(200, "application/json", "{\"ok\":true}");
   });
 
   server.begin();
@@ -1014,16 +1325,4 @@ void loop() {
   ws.cleanupClients();
   applyTrackOutput();
   applyServoMotion();
-
-  if (isFiring && (millis() - fireStartTime >= fireDuration)) {
-    isFiring = false;
-    fireServo.write(FIRE_READY_POS);
-  }
 }
-
-
-
-
-
-
-
