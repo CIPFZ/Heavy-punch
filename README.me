@@ -1,0 +1,221 @@
+## Branch Purpose
+
+This branch keeps the `zclaw` ESP-IDF experiment in the same repository without touching the long-lived Arduino mainline flow.
+
+Branch name:
+
+`codex/zclaw-esp32-try`
+
+The goal of this branch is to run a phone-first `zclaw` device on a classic ESP32 with:
+
+- AP provisioning on first boot or recovery
+- local web chat over Wi-Fi
+- `POST + SSE` chat transport
+- DHT11 temperature/humidity tool support
+- 0.91 inch OLED status display
+- PowerShell helpers for Windows build and flash
+
+## Repository Areas That Matter
+
+- Firmware source: `vendor/zclaw_upstream/`
+- Windows helper scripts: `scripts/`
+- Branch notes and setup guide: `docs/zclaw-esp32-try.md`
+- Optional host-side bridge helpers: `agent/`
+
+`vendor/zclaw_upstream` is vendored source. Its original nested Git metadata was moved aside on purpose so this branch can track the files from the main repository:
+
+- hidden backup path: `vendor/zclaw_upstream/.git.vendor_backup/`
+
+Do not rename that backup folder back to `.git` unless you intentionally want `vendor/zclaw_upstream` to become a nested repository again.
+
+## Hardware Assumptions In This Branch
+
+This branch was developed and tested around the following hardware layout:
+
+- Board: classic ESP32 dev board with CP210x USB-UART
+- Sensor: DHT11 module
+- DHT11 data pin: `GPIO5`
+- OLED: 0.91 inch I2C OLED, SSD1306-compatible, usually `128x32`
+- OLED SDA: `GPIO21`
+- OLED SCL: `GPIO22`
+- OLED address: `0x3C`
+
+Expected OLED pins:
+
+- `GND -> GND`
+- `VCC -> 3.3V`
+- `SCL -> GPIO22`
+- `SDA -> GPIO21`
+
+Expected DHT11 pins:
+
+- `VCC -> 3.3V`
+- `GND -> GND`
+- `DATA -> GPIO5`
+
+## Firmware Behavior In This Branch
+
+The device now works like a standalone Wi-Fi product instead of a serial-only demo.
+
+Provisioning mode:
+
+- starts a setup AP when Wi-Fi is missing or recovery is requested
+- serves a normal HTTP setup page
+- setup address is `http://192.168.4.1`
+
+Chat mode:
+
+- joins the configured Wi-Fi by DHCP
+- serves the local chat page on the device IP
+- uses `POST /api/chat` plus SSE stream updates
+
+Recovery paths:
+
+- Boot button long press enters setup mode
+- Wi-Fi failure can fall back to setup AP
+- setup and LLM settings are split instead of forced into one save action
+
+OLED role:
+
+- shows short boot and setup guidance
+- shows current DHCP IP during chat mode
+- keeps messages short enough for a `128x32` display
+
+## Windows Development Environment
+
+This branch assumes Windows PowerShell and ESP-IDF installed under:
+
+- `C:\Espressif\frameworks\esp-idf-v5.5.3`
+
+Important environment values used on this machine:
+
+- `IDF_PATH=C:\Espressif\frameworks\esp-idf-v5.5.3`
+- `IDF_TOOLS_PATH=C:\Espressif`
+- `IDF_PYTHON_ENV_PATH=C:\Espressif\python_env\idf5.5_py3.11_env`
+
+USB serial during development was usually:
+
+- `COM5`
+
+If your machine or board differs, update the script parameters instead of hardcoding local paths into source files.
+
+## Helper Scripts
+
+Useful PowerShell helpers:
+
+- `scripts/zclaw-sync.ps1`
+- `scripts/zclaw-build.ps1`
+- `scripts/zclaw-flash.ps1`
+- `scripts/zclaw-provision.ps1`
+- `scripts/start-zclaw-web-relay.ps1`
+
+Typical classic ESP32 workflow:
+
+```powershell
+.\scripts\zclaw-sync.ps1
+.\scripts\zclaw-build.ps1 -Target esp32
+.\scripts\zclaw-flash.ps1 -Target esp32 -Port COM5
+```
+
+If you are using a different chip:
+
+- `ESP32-S3`: use `-Target esp32s3`
+- `ESP32-C3`: use `-Target esp32c3`
+
+## Secrets And Local Files
+
+These files are intentionally ignored and should stay local:
+
+- `agent/config.json`
+- `.zclaw_web_api_key`
+
+Do not commit live Wi-Fi credentials, API keys, or personal bridge settings.
+
+The repository also ignores local scratch or unrelated workspace directories that were left around during development:
+
+- `AIBoardLLMQuickTest/`
+- `TankCommandDeck/`
+- `idf_camera/`
+- `vendor/xiaozhi-esp32/`
+
+## What Future Developers Need To Adapt
+
+### 1. Board target
+
+Check the actual MCU before building.
+
+- classic ESP32 and ESP32-S3 do not use the same target
+- adjust `idf.py set-target` or the `-Target` argument in the scripts
+
+### 2. USB-UART and flash port
+
+If the board does not enumerate as `COM5`, change only the script argument:
+
+```powershell
+.\scripts\zclaw-flash.ps1 -Target esp32 -Port COM7
+```
+
+### 3. Wi-Fi and LLM settings
+
+This branch separates network configuration from AI configuration.
+
+If you change provider behavior:
+
+- keep the setup page fields split into Wi-Fi and AI sections
+- keep base URL handling tolerant, for example allowing `https://api.deepseek.com/v1`
+- resolve provider-specific chat endpoints inside firmware instead of asking users to type the full path every time
+
+### 4. Sensor changes
+
+Current sensor support expects a DHT11 on `GPIO5`.
+
+If you move or replace the sensor:
+
+- update the GPIO constant and tool description
+- retest the local `/dht` path and the chat-triggered tool path
+- if switching to DHT22 or another sensor family, review timing and cache behavior instead of reusing DHT11 assumptions blindly
+
+### 5. OLED changes
+
+The UI for the physical display was designed for a very small `0.91 inch 128x32` screen.
+
+If you change the display:
+
+- keep lines short on `128x32`
+- retune page rotation and font size if moving to `128x64`
+- confirm the I2C address instead of assuming `0x3C`
+- if OLED is removed entirely, make sure setup guidance is still clear through the web UI alone
+
+### 6. Upstream zclaw updates
+
+If you want newer upstream `zclaw` code:
+
+- review local changes in `vendor/zclaw_upstream/main/` carefully before replacing files
+- expect conflicts in `web_ui.c`, `main.c`, `llm.c`, `agent.c`, `oled_display.c`, and sensor-related files
+- keep the branch behavior goals intact: AP provisioning, local chat, SSE streaming, DHT11 tool, OLED guidance
+
+### 7. Browser UI expectations
+
+The mobile web UI was intentionally simplified so chat remains the primary screen.
+
+If you redesign it:
+
+- keep chat as the first-class surface
+- keep settings secondary
+- avoid putting all controls on the home screen
+- validate on an actual phone, not only a desktop browser
+
+## Recommended First Steps For A New Developer
+
+1. Verify ESP-IDF works from a fresh PowerShell window.
+2. Build for the correct target with `scripts/zclaw-build.ps1`.
+3. Flash the board and confirm the setup AP appears.
+4. Complete Wi-Fi and AI setup from a phone.
+5. Open the local chat page from the device DHCP IP.
+6. Confirm DHT11 and OLED behavior on real hardware.
+
+## Current Branch Intent
+
+This branch is meant to stay alive as an experimental integration branch.
+
+Do not treat it like a short-lived PR branch unless the owner asks for that later.
