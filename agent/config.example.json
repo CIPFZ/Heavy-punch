@@ -1,0 +1,45 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8765
+  },
+  "web_ui": {
+    "host": "0.0.0.0",
+    "port": 18080
+  },
+  "llm": {
+    "base_url": "https://api.deepseek.com/v1",
+    "api_key": "YOUR_API_KEY",
+    "model": "deepseek-chat"
+  },
+  "asr": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "YOUR_API_KEY",
+    "model": "gpt-4o-mini-transcribe"
+  },
+  "tts": {
+    "provider": "openai",
+    "base_url": "https://api.openai.com/v1",
+    "api_key": "YOUR_API_KEY",
+    "model": "gpt-4o-mini-tts",
+    "voice": "alloy",
+    "format": "wav"
+  },
+  "control_board": {
+    "enabled": false,
+    "port": "COM5",
+    "baud": 115200
+  },
+  "zclaw": {
+    "base_url": "http://192.168.1.6",
+    "timeout_sec": 90
+  },
+  "feishu": {
+    "host": "0.0.0.0",
+    "port": 19090,
+    "app_id": "YOUR_FEISHU_APP_ID",
+    "app_secret": "YOUR_FEISHU_APP_SECRET",
+    "verification_token": "YOUR_FEISHU_VERIFICATION_TOKEN"
+  }
+}

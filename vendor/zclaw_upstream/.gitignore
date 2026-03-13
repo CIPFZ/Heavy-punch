@@ -1,0 +1,47 @@
+# Build output
+build/
+build-qemu/
+build-secure/
+/build-*/
+/build.*/
+sdkconfig
+sdkconfig.qemu
+sdkconfig.old
+/sdkconfig.*
+!/sdkconfig.defaults
+!/sdkconfig.qemu.defaults
+!/sdkconfig.*.defaults
+!/sdkconfig.secure
+!/sdkconfig.test
+
+# Flash encryption keys (NEVER commit these!)
+keys/
+
+# IDE
+.vscode/
+.idea/
+*.code-workspace
+
+# macOS
+.DS_Store
+
+# Test artifacts
+test/host/build/
+
+# Secrets (never commit these)
+*.pem
+*.key
+secrets.h
+
+# ESP-IDF managed components
+managed_components/
+
+# Python
+__pycache__/
+*.py[cod]
+.env
+
+# Editor backup files
+*~
+*.swp
+*.swo

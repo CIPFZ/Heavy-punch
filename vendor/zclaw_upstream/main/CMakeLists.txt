@@ -1,0 +1,69 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "agent.c"
+        "agent_commands.c"
+        "agent_prompt.c"
+        "channel.c"
+        "local_admin.c"
+        "llm.c"
+        "llm_auth.c"
+        "http_gate.c"
+        "tools.c"
+        "tools_common.c"
+        "gpio_policy.c"
+        "tools_gpio.c"
+        "tools_i2c.c"
+        "tools_dht11.c"
+        "tools_memory.c"
+        "tools_persona.c"
+        "tools_cron.c"
+        "tools_system.c"
+        "memory.c"
+        "device_identity.c"
+        "json_util.c"
+        "telegram.c"
+        "telegram_http_diag.c"
+        "telegram_poll_policy.c"
+        "telegram_targets.c"
+        "telegram_chat_ids.c"
+        "telegram_token.c"
+        "cron.c"
+        "memory_keys.c"
+        "telegram_update.c"
+        "text_buffer.c"
+        "security.c"
+        "cron_utils.c"
+        "ratelimit.c"
+        "ota.c"
+        "boot_guard.c"
+        "user_tools.c"
+        "wifi_credentials.c"
+        "web_ui.c"
+        "dht11_sensor.c"
+        "oled_display.c"
+        "qrcodegen.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        nvs_flash
+        esp_wifi
+        esp_http_client
+        esp_http_server
+        esp_netif
+        mdns
+        esp-tls
+        esp_timer
+        json
+        driver
+        lwip
+        esp_driver_usb_serial_jtag
+        app_update
+)
+
+set(ZCLAW_VERSION_FILE "${CMAKE_SOURCE_DIR}/VERSION")
+set(ZCLAW_RELEASE_VERSION "dev")
+if(EXISTS "${ZCLAW_VERSION_FILE}")
+    file(READ "${ZCLAW_VERSION_FILE}" ZCLAW_RELEASE_VERSION)
+    string(STRIP "${ZCLAW_RELEASE_VERSION}" ZCLAW_RELEASE_VERSION)
+endif()
+target_compile_definitions(${COMPONENT_LIB} PRIVATE ZCLAW_VERSION="${ZCLAW_RELEASE_VERSION}")
