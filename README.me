@@ -20,7 +20,6 @@ The goal of this branch is to run a phone-first `zclaw` device on a classic ESP3
 - Firmware source: `vendor/zclaw_upstream/`
 - Windows helper scripts: `scripts/`
 - Branch notes and setup guide: `docs/zclaw-esp32-try.md`
-- Optional host-side bridge helpers: `agent/`
 
 `vendor/zclaw_upstream` is vendored source. Its original nested Git metadata was moved aside on purpose so this branch can track the files from the main repository:
 
@@ -107,7 +106,6 @@ Useful PowerShell helpers:
 - `scripts/zclaw-build.ps1`
 - `scripts/zclaw-flash.ps1`
 - `scripts/zclaw-provision.ps1`
-- `scripts/start-zclaw-web-relay.ps1`
 
 Typical classic ESP32 workflow:
 
@@ -126,17 +124,9 @@ If you are using a different chip:
 
 These files are intentionally ignored and should stay local:
 
-- `agent/config.json`
 - `.zclaw_web_api_key`
 
-Do not commit live Wi-Fi credentials, API keys, or personal bridge settings.
-
-The repository also ignores local scratch or unrelated workspace directories that were left around during development:
-
-- `AIBoardLLMQuickTest/`
-- `TankCommandDeck/`
-- `idf_camera/`
-- `vendor/xiaozhi-esp32/`
+Do not commit live Wi-Fi credentials or API keys.
 
 ## What Future Developers Need To Adapt
 

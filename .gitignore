@@ -2,12 +2,4 @@
 .venv_py314_backup/
 .python-version
 .zclaw_web_api_key
-agent/config.json
-agent/__pycache__/
-preview_new_ui.html
-_tmp_preview.js
-AIBoardLLMQuickTest/
-TankCommandDeck/
-idf_camera/
-vendor/xiaozhi-esp32/
 vendor/zclaw_upstream/.git.vendor_backup/
