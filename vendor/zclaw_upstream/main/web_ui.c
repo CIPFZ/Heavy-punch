@@ -40,6 +40,7 @@ static const char *TAG = "web_ui";
 #define WEB_UI_STATUS_EVENT_COUNT 8
 #define WEB_UI_QR_TEXT_MAX_LEN 192
 #define WEB_UI_QR_TMP_BUF_LEN qrcodegen_BUFFER_LEN_FOR_VERSION(8)
+#define WEB_UI_WIFI_SCAN_LIMIT 16
 
 typedef enum {
     CHAT_JOB_EMPTY = 0,
@@ -84,21 +85,25 @@ static const char *k_setup_html =
 ".shell{max-width:760px;margin:0 auto;padding:16px 14px 24px;display:grid;gap:14px}.hero,.panel{background:linear-gradient(180deg,rgba(255,255,255,.03),rgba(255,255,255,.01));border:1px solid var(--line);border-radius:22px;padding:16px}.hero{overflow:hidden;position:relative}.hero:after{content:'';position:absolute;inset:auto -40px -40px auto;width:140px;height:140px;background:radial-gradient(circle,rgba(255,106,26,.25),transparent 70%);pointer-events:none}"
 ".eyebrow{margin:0 0 6px;color:var(--accent2);font:700 11px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.16em;text-transform:uppercase}h1,h2{margin:0}.muted{color:var(--muted);font-size:14px;line-height:1.5}.grid,.stack{display:grid;gap:12px}.two{display:grid;gap:12px}.info{background:rgba(106,232,255,.05);border:1px solid rgba(106,232,255,.15);border-radius:18px;padding:14px}.mono{font:13px/1.5 ui-monospace,Consolas,monospace;color:#c9d5e1}.pillbar{display:flex;flex-wrap:wrap;gap:8px}.pill{padding:7px 10px;border-radius:999px;background:#1d2530;border:1px solid var(--line);color:#d8e2ec;font:700 11px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.06em;text-transform:uppercase}"
 ".qr{display:grid;gap:8px;justify-items:start}.qr img{width:min(52vw,180px);height:min(52vw,180px);border-radius:18px;border:1px solid var(--line);background:#fff;padding:8px}.field{display:grid;gap:8px}.label{font:700 11px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.12em;text-transform:uppercase;color:var(--accent2)}"
-"input,select{width:100%;box-sizing:border-box;min-height:46px;padding:12px 13px;background:#0f141b;border:1px solid var(--line);border-radius:14px;color:var(--text);font:500 15px/1.3 system-ui,-apple-system,sans-serif}"
+"input,select{width:100%;box-sizing:border-box;min-height:46px;padding:12px 13px;background:#0f141b;border:1px solid var(--line);border-radius:14px;color:var(--text);font:500 15px/1.3 system-ui,-apple-system,sans-serif}.ssidrow{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center}.scanbtn{min-width:108px}"
 "button{min-height:46px;padding:12px 16px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(180deg,#ff7b31,#e25300);color:#fff;font:700 13px/1.2 ui-monospace,Consolas,monospace;letter-spacing:.08em;text-transform:uppercase}.secondary{background:#202835;color:#d8e2ec}.actions{display:flex;flex-wrap:wrap;gap:10px}pre{margin:0;background:#0b0f14;color:#d7e6f2;padding:14px;border-radius:18px;border:1px solid var(--line);overflow:auto;white-space:pre-wrap;font:13px/1.5 ui-monospace,Consolas,monospace}@media(min-width:720px){.two{grid-template-columns:1.1fr .9fr}}</style></head><body>"
 "<div class='shell'><section class='hero'><p class='eyebrow'>zclaw onboard setup</p><h1>Bring the board online</h1><p class='muted'>Use the setup hotspot first. Save Wi-Fi only when you want the board to join your router. Save AI settings separately whenever you need.</p><div class='pillbar'><span class='pill'>AP 192.168.4.1</span><span class='pill'>DHCP after Wi-Fi</span><span class='pill'>OLED shows IP</span></div></section>"
 "<div class='two'><section class='panel stack'><div><p class='eyebrow'>Discovery</p><h2>Open the setup portal</h2></div><div class='info'><div id='setupInfo' class='mono'>Loading...</div></div><div class='qr'><img id='setupQr' alt='Setup QR'><div id='setupQrLabel' class='muted'>Scan to open setup.</div></div></section>"
 "<section class='panel stack'><div><p class='eyebrow'>Quick notes</p><h2>What happens next</h2></div><div class='pillbar'><span class='pill'>Join setup AP</span><span class='pill'>Open portal</span><span class='pill'>Save config</span></div><p class='muted'>After Wi-Fi is saved, reconnect your phone to the same router. Then open the DHCP IP shown on the OLED screen.</p></section></div>"
-"<section class='panel stack'><div><p class='eyebrow'>Config</p><h2>Wi-Fi</h2></div><div class='grid'><label class='field'><span class='label'>cfg_wifi_ssid</span><input id='ssid' placeholder='Wi-Fi SSID'></label><label class='field'><span class='label'>cfg_wifi_pass</span><input id='password' type='password' placeholder='Wi-Fi password'></label></div><div class='actions'><button id='saveWifiBtn'>Commit Wi-Fi</button></div></section>"
+"<section class='panel stack'><div><p class='eyebrow'>Config</p><h2>Wi-Fi</h2></div><div class='grid'><label class='field'><span class='label'>cfg_wifi_ssid</span><div class='ssidrow'><select id='ssidSelect'><option value=''>Scanning nearby Wi-Fi...</option></select><button id='scanWifiBtn' class='secondary scanbtn' type='button'>Refresh</button></div><input id='ssid' type='hidden'></label><label class='field'><span class='label'>cfg_wifi_pass</span><input id='password' type='password' placeholder='Wi-Fi password'></label></div><div class='actions'><button id='saveWifiBtn'>Commit Wi-Fi</button></div></section>"
 "<section class='panel stack'><div><p class='eyebrow'>Config</p><h2>AI settings</h2></div><div class='grid'><label class='field'><span class='label'>cfg_backend</span><select id='backend'><option value='openai'>OpenAI-compatible</option><option value='anthropic'>Anthropic</option><option value='openrouter'>OpenRouter</option><option value='ollama'>Ollama</option></select></label><label class='field'><span class='label'>cfg_model</span><input id='model' placeholder='Model, e.g. deepseek-chat'></label><label class='field'><span class='label'>cfg_base_url</span><input id='apiUrl' placeholder='Base URL, e.g. https://api.deepseek.com/v1'></label><label class='field'><span class='label'>cfg_api_key</span><input id='apiKey' type='password' placeholder='API key'></label></div><div class='actions'><button id='saveLlmBtn' class='secondary'>Save AI settings</button><button id='restartBtn' class='secondary'>Restart setup hotspot</button></div></section>"
 "<pre id='status'>System ready. Save Wi-Fi when you want zclaw to leave setup mode. For OpenAI-compatible backends, you can enter only the base URL and zclaw will append the chat endpoint.</pre></div>"
 "<script>"
-"const statusEl=document.getElementById('status');const setupInfoEl=document.getElementById('setupInfo');const setupQrEl=document.getElementById('setupQr');const setupQrLabelEl=document.getElementById('setupQrLabel');"
+"const statusEl=document.getElementById('status');const setupInfoEl=document.getElementById('setupInfo');const setupQrEl=document.getElementById('setupQr');const setupQrLabelEl=document.getElementById('setupQrLabel');const ssidInput=document.getElementById('ssid');const ssidSelect=document.getElementById('ssidSelect');"
 "function setQrImage(imgEl,labelEl,url,label){if(!imgEl)return;const target=(url||'').trim();if(!target){imgEl.removeAttribute('src');if(labelEl)labelEl.textContent='QR unavailable';return;}imgEl.src='/api/qr.svg?text='+encodeURIComponent(target);if(labelEl)labelEl.textContent=(label||'Scan to open')+': '+target;}"
+"function wifiLabel(net){const auth=(net.auth||'open').toUpperCase();const hidden=net.hidden?'Hidden ':'';return hidden+(net.ssid||'Unknown')+'  ('+net.rssi+' dBm, '+auth+', ch '+net.channel+')';}"
+"function setSelectedSsid(value){ssidInput.value=value||'';if(!ssidSelect)return;const options=[...ssidSelect.options];const found=options.some(opt=>opt.value===ssidInput.value);if(found){ssidSelect.value=ssidInput.value;return;}if(ssidInput.value){const opt=document.createElement('option');opt.value=ssidInput.value;opt.textContent=ssidInput.value+'  (stored)';ssidSelect.appendChild(opt);ssidSelect.value=ssidInput.value;}}"
+"async function loadWifiScan(preferredSsid){try{ssidSelect.disabled=true;ssidSelect.innerHTML='<option value=\"\">Scanning nearby Wi-Fi...</option>';const res=await fetch('/api/wifi/scan');const data=await res.json();if(!res.ok){throw new Error(data.error||('scan_failed_'+res.status));}const networks=Array.isArray(data.networks)?data.networks:[];ssidSelect.innerHTML='';if(!networks.length){const opt=document.createElement('option');opt.value='';opt.textContent='No visible Wi-Fi networks';ssidSelect.appendChild(opt);}for(const net of networks){if(!net||!net.ssid)continue;const opt=document.createElement('option');opt.value=net.ssid;opt.textContent=wifiLabel(net);ssidSelect.appendChild(opt);}setSelectedSsid(preferredSsid||ssidInput.value||'');statusEl.textContent='Found '+networks.length+' nearby Wi-Fi network'+(networks.length===1?'':'s')+'. Choose one, then enter the password.';}catch(err){ssidSelect.innerHTML='<option value=\"\">Wi-Fi scan unavailable</option>';statusEl.textContent='Wi-Fi scan unavailable. '+err.message;}finally{ssidSelect.disabled=false;}}"
 "async function loadSettings(){try{const res=await fetch('/api/settings');const data=await res.json();if(!res.ok)return;"
-"document.getElementById('ssid').value=data.wifi_ssid||'';document.getElementById('backend').value=data.llm_backend||'openai';"
+"setSelectedSsid(data.wifi_ssid||'');document.getElementById('backend').value=data.llm_backend||'openai';"
 "document.getElementById('model').value=data.llm_model||'';document.getElementById('apiUrl').value=data.llm_api_url||'';"
-"const setupUrl=data.setup_url||'http://192.168.4.1';setupInfoEl.textContent='SETUP_URL  '+setupUrl+'\\nNEXT_STEP  Reconnect phone to router after Wi-Fi save\\nAPI_KEY    '+(data.has_api_key?'stored':'missing');setQrImage(setupQrEl,setupQrLabelEl,setupUrl,'Scan setup portal');statusEl.textContent='Save Wi-Fi to leave setup mode. Save AI settings separately whenever you need.';}catch(err){setupInfoEl.textContent='SETUP_URL  http://192.168.4.1\\nNEXT_STEP  Open portal from phone';setQrImage(setupQrEl,setupQrLabelEl,'http://192.168.4.1','Scan setup portal');}}"
+"const setupUrl=data.setup_url||'http://192.168.4.1';setupInfoEl.textContent='SETUP_URL  '+setupUrl+'\\nNEXT_STEP  Reconnect phone to router after Wi-Fi save\\nAPI_KEY    '+(data.has_api_key?'stored':'missing');setQrImage(setupQrEl,setupQrLabelEl,setupUrl,'Scan setup portal');statusEl.textContent='Save Wi-Fi to leave setup mode. Save AI settings separately whenever you need.';await loadWifiScan(data.wifi_ssid||'');}catch(err){setupInfoEl.textContent='SETUP_URL  http://192.168.4.1\\nNEXT_STEP  Open portal from phone';setQrImage(setupQrEl,setupQrLabelEl,'http://192.168.4.1','Scan setup portal');await loadWifiScan('');}}"
+"ssidSelect.onchange=()=>{setSelectedSsid(ssidSelect.value);};document.getElementById('scanWifiBtn').onclick=()=>loadWifiScan(ssidInput.value||ssidSelect.value);"
 "document.getElementById('saveWifiBtn').onclick=async()=>{const payload={wifi_ssid:document.getElementById('ssid').value.trim(),wifi_pass:document.getElementById('password').value};statusEl.textContent='Saving Wi-Fi...';"
 "try{const res=await fetch('/api/settings/wifi',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const data=await res.json();if(!res.ok){statusEl.textContent=data.error||('Wi-Fi save failed ('+res.status+')');return;}statusEl.textContent='Wi-Fi saved. Device is rebooting now. Reconnect your phone to your router, then use the OLED screen or router device list to open the new IP.';}catch(err){statusEl.textContent='Network error: '+err.message;}};"
 "document.getElementById('saveLlmBtn').onclick=async()=>{const payload={llm_backend:document.getElementById('backend').value,llm_model:document.getElementById('model').value.trim(),llm_api_url:document.getElementById('apiUrl').value.trim(),api_key:document.getElementById('apiKey').value.trim()};statusEl.textContent='Saving AI settings...';"
@@ -114,7 +119,7 @@ static const char *k_chat_html =
 ".app{height:100dvh;display:flex;flex-direction:column}.topbar{position:sticky;top:0;z-index:10;display:grid;grid-template-columns:44px 1fr 44px;align-items:center;padding:12px 12px 8px;background:rgba(245,245,247,.76);backdrop-filter:blur(16px);border-bottom:1px solid rgba(18,24,35,.05)}.iconbtn{width:40px;height:40px;border:0;border-radius:20px;background:rgba(255,255,255,.72);box-shadow:0 1px 2px rgba(0,0,0,.04);color:#1f2430;font:600 20px/1 system-ui;padding:0;display:grid;place-items:center}.titlewrap{display:flex;align-items:center;justify-content:center;gap:8px}.title{font-size:17px;font-weight:700;text-align:center}.statusdot{width:7px;height:7px;border-radius:999px;background:var(--good);box-shadow:0 0 0 4px rgba(24,169,87,.12)}.iconbtn.subtle svg{width:18px;height:18px;stroke:#1f2430;stroke-width:1.9;fill:none;stroke-linecap:round}"
 ".chat{flex:1;overflow:auto;padding:8px 14px 164px;display:grid;align-content:start;gap:10px}.empty{min-height:calc(100dvh - 240px);display:grid;place-items:center;text-align:center;color:var(--muted)}.emptyBox{display:grid;gap:14px;justify-items:center}.logo{width:52px;height:52px;border-radius:18px;background:linear-gradient(180deg,#4e82ff,#3367f5);color:#fff;display:grid;place-items:center;font-size:26px;box-shadow:0 18px 40px rgba(52,120,246,.22)}.emptyTitle{font-size:20px;font-weight:700;color:#141821}.emptyHint{font-size:14px;max-width:240px;line-height:1.5}"
 ".bubble{max-width:min(88%,720px);padding:12px 14px;border-radius:20px;white-space:pre-wrap;line-height:1.45;box-shadow:0 1px 2px rgba(0,0,0,.04)}.user{justify-self:end;background:linear-gradient(180deg,var(--blue2),var(--blue));color:#fff;border-bottom-right-radius:8px}.agent{justify-self:start;background:var(--solid);border:1px solid var(--line);border-bottom-left-radius:8px}.agent.streaming{position:relative}.agent.streaming::after{content:'';display:inline-block;width:8px;height:1.1em;margin-left:4px;vertical-align:-0.15em;background:var(--blue);animation:blink 1s steps(1,end) infinite}.system{justify-self:start;background:#fff8ec;border:1px solid rgba(255,159,10,.16);color:#7b5600}.system .summary{font-weight:700}.system .detail{display:none;margin-top:8px;padding-top:8px;border-top:1px solid rgba(255,159,10,.18);color:#7a6943}.system.expanded .detail{display:block}.system .toggle{margin-top:8px;border:0;background:transparent;color:#8c6a11;padding:0;font:600 13px/1 system-ui}.error{justify-self:start;background:#fff1f0;border:1px solid rgba(217,79,69,.16);color:#9f3b34}"
-".composerWrap{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(245,245,247,0),rgba(245,245,247,.88) 24%,rgba(245,245,247,.96));backdrop-filter:blur(18px)}.composer{max-width:920px;margin:0 auto;background:rgba(28,29,32,.84);border-radius:30px;padding:12px;box-shadow:0 20px 44px rgba(0,0,0,.16);display:grid;gap:8px}.inputShell{display:grid;grid-template-columns:1fr 48px;gap:10px;align-items:end}textarea{width:100%;min-height:44px;max-height:140px;resize:none;border:0;background:transparent;color:#fff;font:500 16px/1.45 system-ui;padding:6px 2px 0;outline:none}textarea::placeholder{color:rgba(255,255,255,.52)}textarea:disabled{opacity:.56}.sendBtn{width:44px;height:44px;border:0;border-radius:22px;background:linear-gradient(180deg,#4e82ff,#3367f5);color:#fff;font-size:18px;box-shadow:0 10px 24px rgba(52,120,246,.34);transition:opacity .18s ease,transform .18s ease}.sendBtn.hidden{opacity:0;transform:scale(.88);pointer-events:none}.sendBtn:disabled{opacity:.5;box-shadow:none}.statustext{font-size:12px;color:#aeb4bf;padding:0 2px}"
+".composerWrap{position:fixed;left:0;right:0;bottom:0;padding:10px 12px calc(10px + env(safe-area-inset-bottom));background:linear-gradient(180deg,rgba(245,245,247,0),rgba(245,245,247,.88) 24%,rgba(245,245,247,.96));backdrop-filter:blur(18px)}.composer{max-width:920px;margin:0 auto;background:linear-gradient(180deg,rgba(255,255,255,.9),rgba(248,249,252,.86));border:1px solid rgba(18,24,35,.08);border-radius:30px;padding:12px 12px 10px;box-shadow:0 20px 44px rgba(17,24,39,.1),inset 0 1px 0 rgba(255,255,255,.7);display:grid;gap:8px}.inputShell{display:grid;grid-template-columns:1fr 48px;gap:10px;align-items:end}textarea{width:100%;min-height:44px;max-height:140px;resize:none;border:0;background:transparent;color:#141821;font:500 16px/1.45 system-ui;padding:6px 2px 0;outline:none}textarea::placeholder{color:#9098a4}textarea:disabled{opacity:.56}.sendBtn{width:44px;height:44px;border:0;border-radius:22px;background:linear-gradient(180deg,#4e82ff,#3367f5);color:#fff;font-size:18px;box-shadow:0 10px 24px rgba(52,120,246,.26);transition:opacity .18s ease,transform .18s ease}.sendBtn.hidden{opacity:0;transform:scale(.88);pointer-events:none}.sendBtn:disabled{opacity:.5;box-shadow:none}.statustext{font-size:12px;color:#6e7784;padding:0 2px}"
 ".backdrop{position:fixed;inset:0;background:rgba(16,19,26,.24);opacity:0;pointer-events:none;transition:opacity .24s ease;z-index:30}.backdrop.active{opacity:1;pointer-events:auto}.sheet{position:fixed;left:0;right:0;bottom:0;z-index:40;background:rgba(247,247,250,.94);backdrop-filter:blur(20px);border-radius:26px 26px 0 0;transform:translateY(102%);transition:transform .28s cubic-bezier(.2,.8,.2,1);padding:10px 14px calc(18px + env(safe-area-inset-bottom));max-height:min(78dvh,760px);overflow:auto}.sheet.active{transform:translateY(0)}.handle{width:42px;height:5px;border-radius:999px;background:rgba(17,19,24,.14);margin:2px auto 12px}.sheetTitle{font-size:17px;font-weight:700;text-align:center;margin-bottom:8px}.sheetIntro{font-size:13px;line-height:1.5;color:var(--muted);text-align:center;margin:0 0 14px}.group{background:rgba(255,255,255,.72);border:1px solid rgba(18,24,35,.06);border-radius:20px;padding:14px;display:grid;gap:10px;margin-bottom:12px}.group h3{margin:0;font-size:15px}.sheetMuted{font-size:13px;line-height:1.5;color:var(--muted)}.mono{font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace;color:#434a57}.qrBox{display:grid;gap:8px;justify-items:center}.qrBox img{width:min(52vw,190px);height:min(52vw,190px);background:#fff;border-radius:20px;padding:8px;border:1px solid rgba(18,24,35,.06)}.field{display:grid;gap:7px}.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:#717987;font-weight:700}.field input,.field select{width:100%;min-height:46px;border:0;border-radius:14px;background:#eef1f6;color:#141821;padding:0 14px;font:500 16px/1 system-ui;outline:none}.field select{-webkit-appearance:none;-moz-appearance:none;appearance:none;padding:0 40px 0 14px;background-image:url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23808692' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E\");background-repeat:no-repeat;background-position:right 14px center;background-size:16px 16px}.row{display:flex;gap:10px;flex-wrap:wrap}.sheet button{min-height:46px;border:0;border-radius:14px;padding:0 16px;font:600 14px/1 system-ui}.primary{background:linear-gradient(180deg,#4e82ff,#3367f5);color:#fff}.secondary{background:#e7ebf2;color:#1d2430}.stagebar{display:flex;gap:8px;flex-wrap:wrap}.stage{padding:8px 11px;border-radius:999px;background:#edf1f6;color:#7b8491;font-size:12px;font-weight:700}.stage.active{background:#dbe8ff;color:#2557ca}.stage.done{background:#def6e8;color:#167e46}@keyframes blink{50%{opacity:0}}</style></head><body>"
 "<div class='app'><header class='topbar'><div></div><div class='titlewrap'><div id='titleText' class='title'>Ready</div><div id='statusDot' class='statusdot'></div></div><button id='hubBtn' class='iconbtn subtle' type='button' aria-label='Open device hub'><svg viewBox='0 0 24 24' aria-hidden='true'><line x1='5' y1='6' x2='19' y2='6'/><circle cx='9' cy='6' r='2.2' fill='#1f2430' stroke='none'/><line x1='5' y1='12' x2='19' y2='12'/><circle cx='15' cy='12' r='2.2' fill='#1f2430' stroke='none'/><line x1='5' y1='18' x2='19' y2='18'/><circle cx='11' cy='18' r='2.2' fill='#1f2430' stroke='none'/></svg></button></header><main id='timeline' class='chat'><div id='emptyState' class='empty'><div class='emptyBox'><div class='logo'>Z</div><div class='emptyTitle'>How can I help?</div><div class='emptyHint'>Ask for chat, sensor reads, tool calls, or device help.</div></div></div></main><div class='composerWrap'><div class='composer'><div class='inputShell'><textarea id='message' placeholder='Message zclaw...'></textarea><button id='send' class='sendBtn hidden' type='button'>&uarr;</button></div><div id='status' class='statustext'>Ready</div></div></div><div id='backdrop' class='backdrop'></div><section id='hubSheet' class='sheet'><div class='handle'></div><div class='sheetTitle'>Device Hub</div><p class='sheetIntro'>Connection, quick access, and configuration stay here so chat can stay clean.</p><div class='group'><h3>Connection</h3><div id='deviceInfo' class='mono'>Loading device info...</div><div class='stagebar' id='stagebar'><span class='stage done' data-stage='queued'>Queued</span><span class='stage' data-stage='thinking'>Thinking</span><span class='stage' data-stage='tool'>Tool</span><span class='stage' data-stage='streaming'>Streaming</span><span class='stage' data-stage='final'>Final</span></div></div><div class='group'><h3>Open on phone</h3><div class='qrBox'><img id='deviceQr' alt='Device QR'><div id='deviceQrLabel' class='sheetMuted'>Scan current device IP.</div></div></div><div class='group'><h3>Wi-Fi</h3><div class='field'><span class='label'>ssid</span><input id='settingsSsid' placeholder='New Wi-Fi SSID'></div><div class='field'><span class='label'>password</span><input id='settingsPassword' type='password' placeholder='New Wi-Fi password'></div><div class='row'><button id='saveWifiSettings' class='primary' type='button'>Save Wi-Fi + reboot</button><button id='restartSetup' class='secondary' type='button'>Reopen setup hotspot</button></div></div><div class='group'><h3>AI</h3><div class='field'><span class='label'>backend</span><select id='settingsBackend'><option value='openai'>OpenAI-compatible</option><option value='anthropic'>Anthropic</option><option value='openrouter'>OpenRouter</option><option value='ollama'>Ollama</option></select></div><div class='field'><span class='label'>model</span><input id='settingsModel' placeholder='Model, e.g. deepseek-chat'></div><div class='field'><span class='label'>base url</span><input id='settingsApiUrl' placeholder='Base URL, e.g. https://api.deepseek.com/v1'></div><div class='field'><span class='label'>api key</span><input id='settingsApiKey' type='password' placeholder='Leave blank to keep current key'></div><div class='row'><button id='saveLlmSettings' class='primary' type='button'>Save AI settings</button></div></div><div id='settingsStatus' class='sheetMuted'>Update Wi-Fi and AI settings here without using a serial cable.</div></section></div>"
 "<script>"
@@ -342,6 +347,103 @@ static bool web_ui_backend_requires_api_key_name(const char *backend)
            (strcmp(backend, "openai") == 0 ||
             strcmp(backend, "anthropic") == 0 ||
             strcmp(backend, "openrouter") == 0);
+}
+
+static const char *web_ui_wifi_auth_name(wifi_auth_mode_t authmode)
+{
+    switch (authmode) {
+        case WIFI_AUTH_OPEN:
+            return "open";
+        case WIFI_AUTH_WEP:
+            return "wep";
+        case WIFI_AUTH_WPA_PSK:
+            return "wpa";
+        case WIFI_AUTH_WPA2_PSK:
+            return "wpa2";
+        case WIFI_AUTH_WPA_WPA2_PSK:
+            return "wpa-wpa2";
+        case WIFI_AUTH_WPA2_ENTERPRISE:
+            return "wpa2-ent";
+        case WIFI_AUTH_WPA3_PSK:
+            return "wpa3";
+        case WIFI_AUTH_WPA2_WPA3_PSK:
+            return "wpa2-wpa3";
+        case WIFI_AUTH_WAPI_PSK:
+            return "wapi";
+        default:
+            return "unknown";
+    }
+}
+
+static esp_err_t web_ui_wifi_scan_get_handler(httpd_req_t *req)
+{
+    wifi_scan_config_t scan_cfg = {0};
+    wifi_ap_record_t records[WEB_UI_WIFI_SCAN_LIMIT];
+    uint16_t ap_total = 0;
+    uint16_t record_count = WEB_UI_WIFI_SCAN_LIMIT;
+    cJSON *json = NULL;
+    cJSON *networks = NULL;
+    esp_err_t err;
+
+    scan_cfg.show_hidden = false;
+    err = esp_wifi_scan_start(&scan_cfg, true);
+    if (err != ESP_OK) {
+        return web_ui_send_error(req, 500, "wifi_scan_start_failed");
+    }
+
+    err = esp_wifi_scan_get_ap_num(&ap_total);
+    if (err != ESP_OK) {
+        return web_ui_send_error(req, 500, "wifi_scan_count_failed");
+    }
+
+    if (record_count > ap_total) {
+        record_count = ap_total;
+    }
+
+    if (record_count > 0) {
+        err = esp_wifi_scan_get_ap_records(&record_count, records);
+        if (err != ESP_OK) {
+            return web_ui_send_error(req, 500, "wifi_scan_records_failed");
+        }
+    }
+
+    json = cJSON_CreateObject();
+    networks = cJSON_CreateArray();
+    if (!json || !networks) {
+        cJSON_Delete(json);
+        cJSON_Delete(networks);
+        return ESP_FAIL;
+    }
+
+    cJSON_AddNumberToObject(json, "count", ap_total);
+
+    for (uint16_t i = 0; i < record_count; i++) {
+        cJSON *entry;
+        const char *ssid = records[i].ssid[0] ? (const char *)records[i].ssid : "";
+
+        if (ssid[0] == '\0') {
+            continue;
+        }
+
+        entry = cJSON_CreateObject();
+        if (!entry) {
+            cJSON_Delete(json);
+            cJSON_Delete(networks);
+            return ESP_FAIL;
+        }
+
+        cJSON_AddStringToObject(entry, "ssid", ssid);
+        cJSON_AddNumberToObject(entry, "rssi", records[i].rssi);
+        cJSON_AddStringToObject(entry, "auth", web_ui_wifi_auth_name(records[i].authmode));
+        cJSON_AddNumberToObject(entry, "channel", records[i].primary);
+        cJSON_AddBoolToObject(entry, "hidden", false);
+        cJSON_AddItemToArray(networks, entry);
+    }
+
+    cJSON_AddItemToObject(json, "networks", networks);
+    web_ui_send_json(req, 200, json);
+    cJSON_Delete(json);
+    return ESP_OK;
 }
 
 static bool web_ui_wifi_configured(void)
@@ -1106,6 +1208,12 @@ static esp_err_t web_ui_register_handlers(httpd_handle_t server)
         .handler = web_ui_settings_get_handler,
         .user_ctx = NULL,
     };
+    httpd_uri_t wifi_scan = {
+        .uri = "/api/wifi/scan",
+        .method = HTTP_GET,
+        .handler = web_ui_wifi_scan_get_handler,
+        .user_ctx = NULL,
+    };
     httpd_uri_t setup = {
         .uri = "/api/setup",
         .method = HTTP_POST,
@@ -1177,6 +1285,7 @@ static esp_err_t web_ui_register_handlers(httpd_handle_t server)
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &status), TAG, "status handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &qr), TAG, "qr handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &settings_get), TAG, "settings get handler");
+    ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &wifi_scan), TAG, "wifi scan handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &setup), TAG, "setup handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &settings_wifi), TAG, "settings wifi handler");
     ESP_RETURN_ON_ERROR(httpd_register_uri_handler(server, &settings_llm), TAG, "settings llm handler");
@@ -1241,7 +1350,7 @@ static esp_err_t web_ui_start_softap(void)
     wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
     wifi_config.ap.channel = 6;
 
-    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "set AP mode");
+    ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_APSTA), TAG, "set APSTA mode");
     ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &wifi_config), TAG, "set AP config");
     ESP_RETURN_ON_ERROR(esp_wifi_start(), TAG, "start AP");
 
