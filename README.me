@@ -104,6 +104,24 @@ If you are using a different chip:
 - `ESP32-S3`: use `-Target esp32s3`
 - `ESP32-C3`: use `-Target esp32c3`
 
+## GitHub Actions Build
+
+This branch includes a GitHub Actions workflow for the classic `esp32` target:
+
+- workflow: `.github/workflows/build-zclaw-esp32.yml`
+- trigger manually with `Run workflow`
+- or let it run automatically on pushes to `codex/zclaw-esp32-try`
+
+Each run uploads a downloadable artifact containing:
+
+- `zclaw.bin`
+- `bootloader.bin`
+- `partition-table.bin`
+- `ota_data_initial.bin`
+- `flash_args`
+- `flasher_args.json`
+- `sdkconfig.esp32`
+
 ## Project Layout
 
 - `vendor/zclaw_upstream/`: firmware source

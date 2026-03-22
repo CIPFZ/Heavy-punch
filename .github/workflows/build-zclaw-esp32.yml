@@ -1,0 +1,60 @@
+name: Build zclaw ESP32
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - codex/zclaw-esp32-try
+    paths:
+      - ".github/workflows/build-zclaw-esp32.yml"
+      - "vendor/zclaw_upstream/**"
+      - "scripts/zclaw-build.ps1"
+      - "scripts/zclaw-flash.ps1"
+      - "scripts/zclaw-provision.ps1"
+      - "scripts/zclaw-sync.ps1"
+      - "README.me"
+      - "docs/zclaw-esp32-try.md"
+
+permissions:
+  contents: read
+
+jobs:
+  build-esp32:
+    name: Build ESP32 firmware
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install ESP-IDF
+        uses: espressif/install-esp-idf-action@v1
+        with:
+          version: v5.5.3
+
+      - name: Build zclaw for esp32
+        working-directory: vendor/zclaw_upstream
+        shell: bash
+        run: |
+          idf.py set-target esp32
+          idf.py build
+
+      - name: Prepare firmware package
+        shell: bash
+        run: |
+          mkdir -p dist/zclaw-esp32
+          cp vendor/zclaw_upstream/build/zclaw.bin dist/zclaw-esp32/
+          cp vendor/zclaw_upstream/build/bootloader/bootloader.bin dist/zclaw-esp32/
+          cp vendor/zclaw_upstream/build/partition_table/partition-table.bin dist/zclaw-esp32/
+          cp vendor/zclaw_upstream/build/ota_data_initial.bin dist/zclaw-esp32/
+          cp vendor/zclaw_upstream/build/flash_args dist/zclaw-esp32/
+          cp vendor/zclaw_upstream/build/flasher_args.json dist/zclaw-esp32/
+          cp vendor/zclaw_upstream/sdkconfig dist/zclaw-esp32/sdkconfig.esp32
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zclaw-esp32-firmware-${{ github.run_number }}
+          path: dist/zclaw-esp32
+          if-no-files-found: error
+          retention-days: 30
