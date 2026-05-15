@@ -1,77 +1,93 @@
-﻿# Tank Command Deck (ESP32-S3)
+# Heavy Punch Track Drive
 
-Arduino + ESP32 + 双电机 + 三舵机（炮塔/炮管/开火）履带坦克控制项目。
-
-## Files
-- `TankCommandDeck.ino`: 主程序（热点 + Web 控制台 + WebSocket + 电机/舵机控制）
-- `README.md`: 项目说明
-
-## Hardware
-- 主控: ESP32-S3 Dev Module
-- 电机驱动: 双路 H 桥（A/B 两路）
-- 舵机: 
-  - `TURRET_SERVO_PIN` 炮塔旋转
-  - `BARREL_SERVO_PIN` 炮管俯仰
-  - `FIRE_SERVO_PIN` 开火机构
-
-## Pin Mapping
-- 电机 A（左履带）
-  - `PWMA=5`, `AIN2=6`, `AIN1=7`
-- 电机 B（右履带）
-  - `PWMB=18`, `BIN2=17`, `BIN1=16`
-- 舵机
-  - `TURRET_SERVO_PIN=13`
-  - `BARREL_SERVO_PIN=12`
-  - `FIRE_SERVO_PIN=11`
-
-## Build / Upload
-1. Arduino IDE 打开 `TankCommandDeck.ino`
-2. `Tools -> Board`: `ESP32S3 Dev Module`
-3. 串口选择开发板端口
-4. 编译并上传
+ESP-IDF firmware for an ESP32-S3 tracked vehicle. The current firmware only drives the two track motors; all turret, barrel, fire-servo, chat, sensor, and display features have been removed from the runtime surface.
 
 ## Runtime
-- ESP32 启动后创建 AP:
-  - SSID: `ESP32_WiFi_Motion_Control`
-  - Password: `12345678`
-  - IP: `192.168.1.4`
-- 手机连接 AP 后访问:
-  - `http://192.168.1.4`
+
+- The ESP32-S3 starts its own Wi-Fi access point.
+- AP SSID: `HeavyPunch-Track`
+- AP password: `12345678`
+- Control URL: `http://192.168.4.1`
+- The page uses a WebSocket at `/ws`.
 
 ## Control Model
-- 双摇杆履带控制
-  - 左摇杆控制左履带
-  - 右摇杆控制右履带
-- 炮塔/炮管为按住连续转动
-  - 按下开始，松开停止
-- 开火为非阻塞动作
 
-## WebSocket Commands
-- 履带: `tracks:<left_pct>:<right_pct>` (`-100..100`)
-- 炮塔:
-  - `turret_left_start`
-  - `turret_right_start`
-  - `turret_stop`
-- 炮管:
-  - `barrel_up_start`
-  - `barrel_down_start`
-  - `barrel_stop`
-- 其他:
-  - `fire`
-  - `stop`
+The phone UI has two vertical levers, matching real dual-track controls:
 
-## Tuning Parameters (in .ino)
-- 履带手感
-  - `JOYSTICK_DEADZONE`
-  - `MOTOR_MIN_EFFECTIVE_PWM`
-  - `TRACK_SLEW_STEP`
-  - `TRACK_SIGNAL_TIMEOUT_MS`
-- 舵机速度
-  - `SERVO_UPDATE_INTERVAL_MS`
-  - `TURRET_STEP_PER_TICK`
-  - `BARREL_STEP_PER_TICK`
+- Left lever controls the left track.
+- Right lever controls the right track.
+- Center is `0%`.
+- Push up for forward `+1..+100%`.
+- Pull down for reverse `-1..-100%`.
+- Holding a lever position keeps that track running at the corresponding percentage.
+- Releasing a lever returns that track to `0%`.
+- The `STOP` button immediately brakes both tracks.
 
-## Notes
-- 如果履带方向与期望相反，可调整对应电机方向引脚逻辑或交换电机线序。
-- 如果舵机方向相反，可在接收命令处调整方向符号。
-- 调试日志开关: `ENABLE_DEBUG_LOG`。
+Safety behavior:
+
+- If the browser disconnects, goes hidden, loses focus, or stops sending control frames, the firmware stops the tracks.
+- Firmware command timeout is `350 ms`.
+- The UI sends repeated track frames every `80 ms` while open.
+
+## Pin Mapping
+
+Motor A is the left track:
+
+- `PWMA`: GPIO5
+- `AIN2`: GPIO6
+- `AIN1`: GPIO7
+
+Motor B is the right track:
+
+- `PWMB`: GPIO18
+- `BIN2`: GPIO17
+- `BIN1`: GPIO16
+
+## Firmware Structure
+
+- `main/app_main.c`: NVS, Wi-Fi AP, web server startup, drive update task
+- `main/track_math.c`: percentage-to-PWM mapping, command parsing, slew helper
+- `main/track_drive.c`: GPIO and LEDC hardware output
+- `main/web_server.c`: HTTP root page and WebSocket command handling
+- `main/web_ui.h`: embedded mobile control page
+- `test/host/test_track_math.c`: host-style tests for the core track math
+
+## Build
+
+This machine has ESP-IDF under:
+
+- `C:\Espressif\frameworks\esp-idf-v5.5.3`
+
+From an ESP-IDF PowerShell environment:
+
+```powershell
+idf.py set-target esp32s3
+idf.py build
+```
+
+If ESP-IDF tools are not exported into `PATH`, use the same environment variables as the local scripts or run Espressif's export script first.
+
+## Flash
+
+```powershell
+idf.py -p COMx flash monitor
+```
+
+Replace `COMx` with the connected ESP32-S3 serial port.
+
+Expected serial log includes:
+
+- `AP started: ssid=HeavyPunch-Track password=12345678 url=http://192.168.4.1`
+- `web_server: started on http://192.168.4.1`
+
+## Tuning
+
+Track control constants live in `main/track_math.h` and `main/track_drive.h`:
+
+- `TRACK_DEADZONE_PERCENT`
+- `TRACK_MIN_EFFECTIVE_PWM`
+- `TRACK_SLEW_STEP`
+- `TRACK_DRIVE_UPDATE_INTERVAL_MS`
+- `TRACK_COMMAND_TIMEOUT_MS`
+
+If a track direction is reversed, swap that motor's two direction wires or invert the corresponding direction logic in `main/track_drive.c`.

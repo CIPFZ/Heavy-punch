@@ -1,0 +1,41 @@
+#ifndef WEB_UI_H
+#define WEB_UI_H
+
+static const char WEB_UI_HTML[] =
+"<!doctype html><html lang=\"zh-CN\"><head>"
+"<meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no\">"
+"<title>Heavy Punch Track</title>"
+"<style>"
+":root{--bg:#08111f;--panel:#101d2e;--line:#31445f;--text:#e9f2ff;--muted:#91a8c1;--accent:#25c2a0;--warn:#ffb020;--danger:#f04438}"
+"*{box-sizing:border-box}html,body{margin:0;height:100%;overflow:hidden;background:linear-gradient(160deg,#08111f,#142235 58%,#101827);color:var(--text);font-family:system-ui,-apple-system,\"Segoe UI\",\"Microsoft YaHei\",sans-serif;-webkit-tap-highlight-color:transparent;touch-action:none}"
+".top{position:fixed;top:0;left:0;right:0;height:44px;display:flex;align-items:center;justify-content:space-between;padding:8px 12px;background:#08111fcc;border-bottom:1px solid #263954;z-index:3}"
+".brand{font-weight:800;font-size:14px;letter-spacing:.08em}.status{font-size:12px;color:var(--muted);border:1px solid #354a67;border-radius:999px;padding:4px 9px}.status.ok{color:#9ff4d0;border-color:#287f6c}.status.bad{color:#ffc4bd;border-color:#8e3d37}"
+".wrap{height:100%;padding:56px 12px 12px;display:grid;grid-template-columns:1fr 1fr;gap:12px}"
+".leverBox{min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#101d2ecc;border:1px solid var(--line);border-radius:8px;padding:12px}"
+".label{font-size:13px;color:var(--muted);font-weight:700;letter-spacing:.06em}.value{font-size:28px;font-weight:900;font-variant-numeric:tabular-nums}"
+".slot{position:relative;width:min(34vw,150px);height:min(68vh,520px);min-height:260px;border-radius:8px;border:1px solid #49627f;background:linear-gradient(180deg,#09121f,#1c2d43);box-shadow:inset 0 14px 28px #0008}"
+".zero{position:absolute;left:10px;right:10px;top:50%;height:2px;background:#6f86a3}.scale{position:absolute;left:50%;top:10px;bottom:10px;width:1px;background:#334963}"
+".knob{position:absolute;left:10px;right:10px;height:54px;border-radius:8px;border:1px solid #a6ffe8;background:linear-gradient(180deg,#42e8be,#13977e);box-shadow:0 10px 18px #0008;display:flex;align-items:center;justify-content:center;color:#03251f;font-weight:900}"
+".meter{height:8px;width:min(34vw,150px);background:#26364b;border-radius:999px;overflow:hidden}.fill{height:100%;width:0;background:var(--accent)}"
+".stop{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:4;border:1px solid #ffaaa3;background:linear-gradient(180deg,#f97066,#c62f27);color:white;height:46px;min-width:142px;border-radius:8px;font-size:15px;font-weight:900;box-shadow:0 8px 18px #0009}"
+"@media (orientation:portrait){.wrap{padding-bottom:72px}.slot{height:min(62vh,500px);width:min(38vw,150px)}.meter{width:min(38vw,150px)}.value{font-size:24px}}"
+"</style></head><body>"
+"<div class=\"top\"><div class=\"brand\">HEAVY PUNCH</div><div id=\"status\" class=\"status bad\">DISCONNECTED</div></div>"
+"<main class=\"wrap\">"
+"<section class=\"leverBox\"><div class=\"label\">LEFT TRACK</div><div id=\"valueL\" class=\"value\">0%</div><div id=\"slotL\" class=\"slot\"><div class=\"scale\"></div><div class=\"zero\"></div><div id=\"knobL\" class=\"knob\">L</div></div><div class=\"meter\"><div id=\"fillL\" class=\"fill\"></div></div></section>"
+"<section class=\"leverBox\"><div class=\"label\">RIGHT TRACK</div><div id=\"valueR\" class=\"value\">0%</div><div id=\"slotR\" class=\"slot\"><div class=\"scale\"></div><div class=\"zero\"></div><div id=\"knobR\" class=\"knob\">R</div></div><div class=\"meter\"><div id=\"fillR\" class=\"fill\"></div></div></section>"
+"</main><button id=\"stop\" class=\"stop\">STOP</button>"
+"<script>"
+"let ws=null,L=0,R=0,last='';const statusEl=document.getElementById('status');"
+"function setStatus(ok){statusEl.textContent=ok?'CONNECTED':'DISCONNECTED';statusEl.className='status '+(ok?'ok':'bad')}"
+"function connect(){ws=new WebSocket('ws://'+location.host+'/ws');ws.onopen=()=>{setStatus(true);sendTracks(true)};ws.onclose=()=>{setStatus(false);setTimeout(connect,700)};ws.onerror=()=>setStatus(false)}"
+"function send(msg){if(ws&&ws.readyState===1)ws.send(msg)}"
+"function sendTracks(force){const msg='tracks:'+L+':'+R;if(force||msg!==last){send(msg);last=msg}}"
+"function clamp(v,a,b){return v<a?a:v>b?b:v}"
+"function draw(side,val){const slot=document.getElementById('slot'+side),knob=document.getElementById('knob'+side),value=document.getElementById('value'+side),fill=document.getElementById('fill'+side);const h=slot.clientHeight,kh=54,mid=(h-kh)/2,range=mid-2;knob.style.top=(mid-(val/100)*range)+'px';value.textContent=val+'%';fill.style.width=Math.abs(val)+'%';fill.style.background=val>=0?'#25c2a0':'#ffb020'}"
+"function bind(side){const slot=document.getElementById('slot'+side);let active=false;function setY(y){const r=slot.getBoundingClientRect();const mid=r.top+r.height/2;let pct=Math.round(((mid-y)/(r.height/2))*100);pct=clamp(pct,-100,100);if(side==='L')L=pct;else R=pct;draw(side,pct);sendTracks(false)}function zero(){active=false;if(side==='L')L=0;else R=0;draw(side,0);sendTracks(true)}slot.addEventListener('pointerdown',e=>{active=true;slot.setPointerCapture(e.pointerId);setY(e.clientY)});slot.addEventListener('pointermove',e=>{if(active)setY(e.clientY)});slot.addEventListener('pointerup',zero);slot.addEventListener('pointercancel',zero);slot.addEventListener('lostpointercapture',zero)}"
+"function allStop(){L=0;R=0;draw('L',0);draw('R',0);sendTracks(true);send('stop')}"
+"window.addEventListener('load',()=>{draw('L',0);draw('R',0);bind('L');bind('R');connect();setInterval(()=>sendTracks(true),80);document.getElementById('stop').addEventListener('pointerdown',e=>{e.preventDefault();allStop()});window.addEventListener('blur',allStop);document.addEventListener('visibilitychange',()=>{if(document.hidden)allStop()})});"
+"</script></body></html>";
+
+#endif

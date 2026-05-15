@@ -1,0 +1,9 @@
+idf_component_register(
+    SRCS
+        "app_main.c"
+        "track_drive.c"
+        "track_math.c"
+        "web_server.c"
+    INCLUDE_DIRS
+        "."
+)

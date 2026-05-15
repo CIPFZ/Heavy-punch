@@ -1,0 +1,10 @@
+build/
+build_host/
+monitor.out
+monitor.err
+sdkconfig
+sdkconfig.old
+managed_components/
+.zclaw_web_api_key
+.venv/
+.venv_py314_backup/
