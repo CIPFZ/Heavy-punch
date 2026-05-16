@@ -8,7 +8,7 @@
 
 #include "track_math.h"
 
-#define PWMA GPIO_NUM_5
+#define PWMA GPIO_NUM_12
 #define AIN2 GPIO_NUM_6
 #define AIN1 GPIO_NUM_7
 #define PWMB GPIO_NUM_18

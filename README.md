@@ -64,7 +64,7 @@ Safety behavior:
 
 Motor A is the left track:
 
-- `PWMA`: GPIO5
+- `PWMA`: GPIO12
 - `AIN2`: GPIO6
 - `AIN1`: GPIO7
 
