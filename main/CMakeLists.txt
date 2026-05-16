@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "camera_stream.c"
         "track_drive.c"
         "track_math.c"
         "web_server.c"

@@ -1,6 +1,7 @@
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
+#include "esp_mac.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -8,15 +9,33 @@
 #include "lwip/ip4_addr.h"
 #include "nvs_flash.h"
 
+#include "camera_stream.h"
 #include "track_drive.h"
 #include "web_server.h"
 
 #define AP_SSID "HeavyPunch-Track"
 #define AP_PASSWORD "12345678"
 #define AP_CHANNEL 6
-#define AP_MAX_CONNECTIONS 2
+#define AP_MAX_CONNECTIONS 5
 
 static const char *TAG = "heavy_punch";
+
+static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                               void *event_data) {
+  (void)arg;
+  if (event_base != WIFI_EVENT) {
+    return;
+  }
+
+  if (event_id == WIFI_EVENT_AP_STACONNECTED) {
+    const wifi_event_ap_staconnected_t *event = (const wifi_event_ap_staconnected_t *)event_data;
+    ESP_LOGI(TAG, "station connected: " MACSTR " aid=%d", MAC2STR(event->mac), event->aid);
+  } else if (event_id == WIFI_EVENT_AP_STADISCONNECTED) {
+    const wifi_event_ap_stadisconnected_t *event =
+        (const wifi_event_ap_stadisconnected_t *)event_data;
+    ESP_LOGI(TAG, "station disconnected: " MACSTR " aid=%d", MAC2STR(event->mac), event->aid);
+  }
+}
 
 static void drive_task(void *arg) {
   (void)arg;
@@ -44,6 +63,9 @@ static esp_err_t wifi_init_ap(void) {
 
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "wifi init failed");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
+                                                          wifi_event_handler, NULL, NULL),
+                      TAG, "wifi event handler failed");
 
   wifi_config_t wifi_config = {
       .ap = {
@@ -73,8 +95,10 @@ void app_main(void) {
   ESP_ERROR_CHECK(ret);
 
   ESP_ERROR_CHECK(track_drive_init());
+  ESP_ERROR_CHECK(camera_stream_init());
   ESP_ERROR_CHECK(wifi_init_ap());
   ESP_ERROR_CHECK(web_server_start());
+  ESP_ERROR_CHECK(camera_stream_start());
 
   xTaskCreate(drive_task, "drive_task", 3072, NULL, 12, NULL);
 }
