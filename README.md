@@ -8,7 +8,8 @@ ESP-IDF firmware for an ESP32-S3 tracked vehicle with OV2640 FPV video and dual-
 - AP SSID: `HeavyPunch-Track`
 - AP password: `12345678`
 - Control URL: `http://192.168.4.1`
-- Camera stream: `http://192.168.4.1:81/stream`
+- Primary camera stream: WebSocket binary JPEG at `ws://192.168.4.1/video-ws`
+- Fallback camera stream: `http://192.168.4.1:81/stream`
 - Snapshot: `http://192.168.4.1/capture.jpg`
 - The page uses a WebSocket at `/ws`.
 - The access point is configured for up to 5 client devices.
@@ -18,13 +19,14 @@ ESP-IDF firmware for an ESP32-S3 tracked vehicle with OV2640 FPV video and dual-
 The current video test profile is:
 
 - Sensor: OV2640
-- Stream format: MJPEG over HTTP on port `81`
+- Primary stream format: JPEG frames over a binary WebSocket on `/video-ws`
+- Fallback stream format: MJPEG over HTTP on port `81`
 - Frame size: `QVGA 320x240`
 - JPEG quality: `24` (`esp32-camera` uses lower numbers for larger, higher-quality JPEGs)
 - Capture limit: about `20 fps`
 - Maximum MJPEG clients: `5`
 
-Camera capture is isolated from HTTP streaming. A dedicated capture task reads the OV2640 on Core 1 and stores the latest JPEG frame in PSRAM. Stream clients and snapshots read from that latest-frame cache, so slow network clients do not directly block sensor capture.
+Camera capture is isolated from network streaming. A dedicated capture task reads the OV2640 on Core 1 and stores the latest JPEG frame in PSRAM. WebSocket video clients, fallback MJPEG clients, and snapshots read from that latest-frame cache, so slow network clients do not directly block sensor capture.
 
 The firmware does not use H.264/H.265. ESP32-S3 has no hardware H.264 encoder, and software H.264 encoding at useful FPV resolutions competes with Wi-Fi, camera DMA, control handling, and PSRAM bandwidth. For higher-resolution smooth video, the practical hardware path is a camera/SoC with hardware video encoding or an external encoder.
 
@@ -97,11 +99,11 @@ Camera pitch servo:
 ## Firmware Structure
 
 - `main/app_main.c`: NVS, Wi-Fi AP, web server startup, drive update task
-- `main/camera_stream.c`: OV2640 init, latest-frame capture task, low-latency MJPEG stream on port 81, snapshot endpoint
+- `main/camera_stream.c`: OV2640 init, latest-frame capture task, latest-frame cache, fallback MJPEG stream on port 81, snapshot endpoint
 - `main/camera_tilt.c`: FPV camera pitch servo output
 - `main/track_math.c`: percentage-to-PWM mapping, command parsing, slew helper
 - `main/track_drive.c`: GPIO and LEDC hardware output
-- `main/web_server.c`: HTTP root page, snapshot routing, simplified WebSocket command handling
+- `main/web_server.c`: HTTP root page, snapshot routing, simplified control WebSocket, binary JPEG video WebSocket
 - `main/web_ui.h`: embedded FPV video and dual-track control page
 - `test/host/test_track_math.c`: host-style tests for the core track math
 

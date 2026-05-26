@@ -114,7 +114,8 @@ static void tune_sensor(sensor_t *sensor) {
   sensor->set_reg(sensor, (OV2640_BANK_SENSOR << 8) | OV2640_REG_COM8, 0xFF, OV2640_COM8_BANDING_AGC_AEC);
 }
 
-static esp_err_t copy_latest_frame(uint8_t *dst, size_t dst_capacity, size_t *out_len, uint32_t *out_seq) {
+esp_err_t camera_stream_copy_latest(uint8_t *dst, size_t dst_capacity, size_t *out_len,
+                                    uint32_t *out_seq) {
   if (dst == NULL || out_len == NULL || out_seq == NULL) {
     return ESP_ERR_INVALID_ARG;
   }
@@ -140,7 +141,7 @@ static esp_err_t copy_latest_frame(uint8_t *dst, size_t dst_capacity, size_t *ou
   return ESP_OK;
 }
 
-static bool wait_for_new_frame(uint32_t last_seq) {
+bool camera_stream_wait_for_frame(uint32_t last_seq) {
   for (int i = 0; i < 4; ++i) {
     if (xSemaphoreTake(latest_frame_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
       const bool ready = latest_frame.ready && latest_frame.seq != last_seq;
@@ -153,6 +154,10 @@ static bool wait_for_new_frame(uint32_t last_seq) {
                         pdMS_TO_TICKS(CAMERA_STREAM_WAIT_MS / 4));
   }
   return true;
+}
+
+size_t camera_stream_max_frame_bytes(void) {
+  return CAMERA_LATEST_FRAME_MAX_BYTES;
 }
 
 static esp_err_t socket_send_all(int fd, const void *data, size_t len) {
@@ -220,7 +225,7 @@ esp_err_t camera_stream_capture_handler(httpd_req_t *req) {
 
   size_t len = 0;
   uint32_t seq = 0;
-  esp_err_t err = copy_latest_frame(scratch, CAMERA_LATEST_FRAME_MAX_BYTES, &len, &seq);
+  esp_err_t err = camera_stream_copy_latest(scratch, CAMERA_LATEST_FRAME_MAX_BYTES, &len, &seq);
   if (err != ESP_OK) {
     free(scratch);
     httpd_resp_set_status(req, "503 Service Unavailable");
@@ -262,11 +267,11 @@ static void stream_client_task(void *arg) {
   uint32_t last_seq = 0;
 
   while (err == ESP_OK) {
-    wait_for_new_frame(last_seq);
+    camera_stream_wait_for_frame(last_seq);
 
     size_t frame_len = 0;
     uint32_t seq = 0;
-    err = copy_latest_frame(scratch, CAMERA_LATEST_FRAME_MAX_BYTES, &frame_len, &seq);
+    err = camera_stream_copy_latest(scratch, CAMERA_LATEST_FRAME_MAX_BYTES, &frame_len, &seq);
     if (err != ESP_OK) {
       vTaskDelay(pdMS_TO_TICKS(20));
       err = ESP_OK;

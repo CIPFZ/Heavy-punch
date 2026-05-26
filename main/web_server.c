@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "esp_http_server.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,6 +17,10 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t server;
+
+typedef struct {
+  int fd;
+} video_ws_client_t;
 
 static int16_t clamp_percent(long value) {
   if (value < -100) {
@@ -94,6 +99,76 @@ static esp_err_t ws_handler(httpd_req_t *req) {
   return dispatch_control_message(message);
 }
 
+static void video_ws_task(void *arg) {
+  video_ws_client_t *client = (video_ws_client_t *)arg;
+  const int fd = client->fd;
+  free(client);
+
+  uint8_t *scratch =
+      heap_caps_malloc(camera_stream_max_frame_bytes(), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+  if (scratch == NULL) {
+    scratch = heap_caps_malloc(camera_stream_max_frame_bytes(), MALLOC_CAP_8BIT);
+  }
+  if (scratch == NULL) {
+    ESP_LOGW(TAG, "video websocket buffer unavailable");
+    httpd_sess_trigger_close(server, fd);
+    vTaskDelete(NULL);
+  }
+
+  ESP_LOGI(TAG, "video websocket connected");
+  uint32_t last_seq = 0;
+  while (true) {
+    camera_stream_wait_for_frame(last_seq);
+
+    size_t len = 0;
+    uint32_t seq = 0;
+    esp_err_t err =
+        camera_stream_copy_latest(scratch, camera_stream_max_frame_bytes(), &len, &seq);
+    if (err != ESP_OK || seq == last_seq || len == 0) {
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+    last_seq = seq;
+
+    httpd_ws_frame_t frame = {
+        .final = true,
+        .fragmented = false,
+        .type = HTTPD_WS_TYPE_BINARY,
+        .payload = scratch,
+        .len = len,
+    };
+    err = httpd_ws_send_frame_async(server, fd, &frame);
+    if (err != ESP_OK) {
+      break;
+    }
+  }
+
+  free(scratch);
+  httpd_sess_trigger_close(server, fd);
+  ESP_LOGI(TAG, "video websocket disconnected");
+  vTaskDelete(NULL);
+}
+
+static esp_err_t video_ws_handler(httpd_req_t *req) {
+  if (req->method != HTTP_GET) {
+    return ESP_OK;
+  }
+
+  video_ws_client_t *client = calloc(1, sizeof(*client));
+  if (client == NULL) {
+    return ESP_ERR_NO_MEM;
+  }
+  client->fd = httpd_req_to_sockfd(req);
+
+  BaseType_t ok =
+      xTaskCreatePinnedToCore(video_ws_task, "video_ws", 6144, client, 4, NULL, 0);
+  if (ok != pdPASS) {
+    free(client);
+    return ESP_ERR_NO_MEM;
+  }
+  return ESP_OK;
+}
+
 esp_err_t web_server_start(void) {
   httpd_config_t config = HTTPD_DEFAULT_CONFIG();
   config.server_port = 80;
@@ -102,7 +177,7 @@ esp_err_t web_server_start(void) {
   config.task_priority = 5;
   config.stack_size = 8192;
   config.max_open_sockets = 8;
-  config.max_uri_handlers = 3;
+  config.max_uri_handlers = 4;
   config.lru_purge_enable = true;
 
   esp_err_t err = httpd_start(&server, &config);
@@ -126,6 +201,15 @@ esp_err_t web_server_start(void) {
       .user_ctx = NULL,
   };
   ESP_ERROR_CHECK(httpd_register_uri_handler(server, &capture));
+
+  const httpd_uri_t video_ws = {
+      .uri = "/video-ws",
+      .method = HTTP_GET,
+      .handler = video_ws_handler,
+      .user_ctx = NULL,
+      .is_websocket = true,
+  };
+  ESP_ERROR_CHECK(httpd_register_uri_handler(server, &video_ws));
 
   const httpd_uri_t ws = {
       .uri = "/ws",
