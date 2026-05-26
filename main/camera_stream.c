@@ -44,12 +44,12 @@
 #define CAM_PIN_PCLK 14
 
 #define CAMERA_XCLK_FREQ_HZ 20000000
-#define CAMERA_FRAME_SIZE FRAMESIZE_HVGA
-#define CAMERA_JPEG_QUALITY 20
+#define CAMERA_FRAME_SIZE FRAMESIZE_QVGA
+#define CAMERA_JPEG_QUALITY 24
 #define CAMERA_FB_COUNT 2
-#define CAMERA_CAPTURE_INTERVAL_MS 100
-#define CAMERA_STREAM_WAIT_MS 120
-#define CAMERA_LATEST_FRAME_MAX_BYTES (96 * 1024)
+#define CAMERA_CAPTURE_INTERVAL_MS 50
+#define CAMERA_STREAM_WAIT_MS 60
+#define CAMERA_LATEST_FRAME_MAX_BYTES (48 * 1024)
 #define CAMERA_FRAME_READY_BIT BIT0
 #define CAMERA_STREAM_PORT 81
 #define CAMERA_MAX_STREAM_CLIENTS 5
@@ -182,7 +182,7 @@ static void camera_capture_task(void *arg) {
     camera_fb_t *fb = esp_camera_fb_get();
     if (fb == NULL) {
       ESP_LOGW(TAG, "frame capture failed");
-      vTaskDelay(pdMS_TO_TICKS(CAMERA_CAPTURE_INTERVAL_MS));
+      vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
 
@@ -199,7 +199,7 @@ static void camera_capture_task(void *arg) {
     }
 
     esp_camera_fb_return(fb);
-    vTaskDelay(pdMS_TO_TICKS(CAMERA_CAPTURE_INTERVAL_MS));
+    vTaskDelay(pdMS_TO_TICKS(1));
   }
 }
 
@@ -349,9 +349,14 @@ static void stream_server_task(void *arg) {
 
     const int flag = 1;
     setsockopt(client_fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+    struct timeval timeout = {
+        .tv_sec = 0,
+        .tv_usec = 200000,
+    };
+    setsockopt(client_fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
     BaseType_t ok = xTaskCreatePinnedToCore(stream_client_task, "mjpeg_client", 6144,
-                                           (void *)(intptr_t)client_fd, 4, NULL, 1);
+                                           (void *)(intptr_t)client_fd, 4, NULL, 0);
     if (ok != pdPASS) {
       close(client_fd);
       xSemaphoreGive(stream_client_slots);

@@ -19,9 +19,9 @@ The current video test profile is:
 
 - Sensor: OV2640
 - Stream format: MJPEG over HTTP on port `81`
-- Frame size: `HVGA 480x320`
-- JPEG quality: `20` (`esp32-camera` uses lower numbers for larger, higher-quality JPEGs)
-- Capture limit: about `10 fps`
+- Frame size: `QVGA 320x240`
+- JPEG quality: `24` (`esp32-camera` uses lower numbers for larger, higher-quality JPEGs)
+- Capture limit: about `20 fps`
 - Maximum MJPEG clients: `5`
 
 Camera capture is isolated from HTTP streaming. A dedicated capture task reads the OV2640 on Core 1 and stores the latest JPEG frame in PSRAM. Stream clients and snapshots read from that latest-frame cache, so slow network clients do not directly block sensor capture.
@@ -41,24 +41,20 @@ The phone UI has two vertical levers, matching real dual-track controls:
 - Releasing a lever returns that track to `0%`.
 - The `STOP` button immediately brakes both tracks.
 
-The UI supports shared multi-device control roles:
+The WebSocket control path is intentionally simple. The page sends full dual-track commands only:
 
-- `BOTH`: one device controls both tracks.
-- `LEFT`: one device controls only the left track.
-- `RIGHT`: one device controls only the right track.
+- `tracks:<left>:<right>`
+- `tilt:<percent>`
+- `stop`
 
-Role-specific URLs:
-
-- `http://192.168.4.1/?role=left`
-- `http://192.168.4.1/?role=right`
-
-All control clients share one global track state. `LEFT` and `RIGHT` role clients send single-axis commands, while `BOTH` clients send full-track commands. `STOP` is always global and stops both tracks from any client.
+`tilt` controls the FPV camera pitch servo from `-100%` to `+100%`; positive values tilt the camera upward.
 
 Safety behavior:
 
 - If the browser disconnects, goes hidden, loses focus, or stops sending control frames, the firmware stops the tracks.
 - Firmware command timeout is `350 ms`.
 - The UI sends repeated track frames every `160 ms` while open.
+- The UI prevents browser double-tap zoom and reconnects the control WebSocket automatically after a refresh or network drop.
 
 ## Pin Mapping
 
@@ -94,13 +90,18 @@ OV2640 camera module:
 - `XCLK`: GPIO15
 - `FLASH`: GPIO3
 
+Camera pitch servo:
+
+- `PWM`: GPIO13
+
 ## Firmware Structure
 
 - `main/app_main.c`: NVS, Wi-Fi AP, web server startup, drive update task
-- `main/camera_stream.c`: OV2640 init, latest-frame capture task, MJPEG stream on port 81, snapshot endpoint
+- `main/camera_stream.c`: OV2640 init, latest-frame capture task, low-latency MJPEG stream on port 81, snapshot endpoint
+- `main/camera_tilt.c`: FPV camera pitch servo output
 - `main/track_math.c`: percentage-to-PWM mapping, command parsing, slew helper
 - `main/track_drive.c`: GPIO and LEDC hardware output
-- `main/web_server.c`: HTTP root page, snapshot routing, WebSocket command handling, shared control state
+- `main/web_server.c`: HTTP root page, snapshot routing, simplified WebSocket command handling
 - `main/web_ui.h`: embedded FPV video and dual-track control page
 - `test/host/test_track_math.c`: host-style tests for the core track math
 

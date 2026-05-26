@@ -10,6 +10,7 @@
 #include "nvs_flash.h"
 
 #include "camera_stream.h"
+#include "camera_tilt.h"
 #include "track_drive.h"
 #include "web_server.h"
 
@@ -95,6 +96,7 @@ void app_main(void) {
   ESP_ERROR_CHECK(ret);
 
   ESP_ERROR_CHECK(track_drive_init());
+  ESP_ERROR_CHECK(camera_tilt_init());
   ESP_ERROR_CHECK(camera_stream_init());
   ESP_ERROR_CHECK(wifi_init_ap());
   ESP_ERROR_CHECK(web_server_start());
