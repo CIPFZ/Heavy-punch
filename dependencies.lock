@@ -1,4 +1,66 @@
 dependencies:
+  espressif/cjson:
+    component_hash: e788323270d90738662d66fffa910bfe1fba019bba087f01557e70c40485b469
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.7.19~2
+  espressif/cmake_utilities:
+    component_hash: 351350613ceafba240b761b4ea991e0f231ac7a9f59a9ee901f751bddc0bb18f
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.1'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.5.3
+  espressif/dl_fft:
+    component_hash: ced3cf28cc70452b7859c06f4e5059215167254a2047e34c893d6f501ccd6ea2
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.4.0
+  espressif/esp-dsp:
+    component_hash: 12e44db246517a627bc0fe2b255b8335410c0215c98bfba2df5a8e3edea839ef
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.2'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.8.0
+  espressif/esp-sr:
+    component_hash: aa58d6a13a49600314a50a27240ccbd17e407f608216a3086d4868e0da2e8053
+    dependencies:
+    - name: espressif/cjson
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.7.19
+    - name: espressif/dl_fft
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.2.0'
+    - name: espressif/esp-dsp
+      registry_url: https://components.espressif.com
+      require: private
+      version: 1.8.0
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 2.4.6
   espressif/esp32-camera:
     component_hash: 2b75f6f0c987fb0e3687ccbd464cd00c163ea8cb05d2470cfb05adf6535bc488
     dependencies:
@@ -10,9 +72,132 @@ dependencies:
       require: private
       version: '>=5.1'
     source:
-      registry_url: https://components.espressif.com/
+      registry_url: https://components.espressif.com
       type: service
     version: 2.1.6
+  espressif/esp_audio_codec:
+    component_hash: af4663830bc73eca58febcc34a976d003465e78ed57458aa00a14b231e392ca1
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 2.4.1
+  espressif/esp_audio_effects:
+    component_hash: 8fa2bf7356a3c7fb9a9c7d2185aba474fa033b0506886c70752f67c42cd81b3f
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.2.1
+  espressif/esp_cam_sensor:
+    component_hash: 4a070d634eacdc4ed70c7efb02286b32495f294e0cb2c395844d0c06dd713b15
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: espressif/esp_sccb_intf
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.0.5'
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32p4
+    - esp32s3
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32s31
+    version: 2.1.0
+  espressif/esp_capture:
+    component_hash: a4eb200170dee73e0223a922051c569267a8db8f1f6ad91321221fb35b2af5db
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: espressif/esp-sr
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^2.4
+    - name: espressif/esp32-camera
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32s3, esp32s2]
+      version: ^2.0
+    - name: espressif/esp_codec_dev
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.3
+    - name: espressif/esp_muxer
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^1.2
+    - name: espressif/esp_video
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4, esp32s3, esp32c3, esp32c5, esp32c6, esp32c61, esp32s31]
+      version: ^2.1
+    - name: espressif/gmf_audio
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^0.8
+    - name: espressif/gmf_video
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^0.8
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.8.4
+  espressif/esp_codec_dev:
+    component_hash: 896c67360ae1f8dedaf8a53dfe48c015317fa455f061a5165307892296990028
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.5.10
+  espressif/esp_h264:
+    component_hash: 5ccc09adefccabade1530b9dd106d07c3c96e991dc35b5516063165ef60c5646
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    version: 1.3.6
+  espressif/esp_image_effects:
+    component_hash: a9a9a18173dc338f94559e61ebbfc1aeff5ebb2f7703e7e3d2431c5bb3450fe6
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.1.0
   espressif/esp_jpeg:
     component_hash: defb83669293cbf86d0fa86b475ba5517aceed04ed70db435388c151ab37b5d7
     dependencies:
@@ -23,13 +208,297 @@ dependencies:
       registry_url: https://components.espressif.com
       type: service
     version: 1.3.1
+  espressif/esp_libsrtp:
+    component_hash: 131560184c73ec09f77d8904a2db709307803f0f9f111898921b6966776eac15
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.0.0
+  espressif/esp_muxer:
+    component_hash: 390a00633bdd35cf90bdfc55cdfe895a937546e86c63cee18989bf0c1ff194bc
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 1.2.2
+  espressif/esp_new_jpeg:
+    component_hash: 98823384f51ca298e2c9bebacd1c629148e528ed0902d18b16556df151519e68
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32s31
+    - esp32p4
+    - esp32c2
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32h4
+    version: 1.0.1
+  espressif/esp_peer:
+    dependencies:
+    - name: espressif/esp_libsrtp
+      version: ^1.0.0
+    source:
+      path: C:\Users\ytq\work\ai\Heavy-punch\components\esp_peer
+      type: local
+    version: 1.4.1
+  espressif/esp_sccb_intf:
+    component_hash: c071b189e49f40940722aea01a5489f873385cc39cd5b14012341135b85d1a9d
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.3'
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.0.8
+  espressif/esp_video:
+    component_hash: 2b48fbd6297328305d6ba2cde287573bed13f1c33d417981ec925d1eab1d2fed
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com
+      require: private
+      version: 0.*
+    - name: espressif/esp_cam_sensor
+      registry_url: https://components.espressif.com
+      require: private
+      version: 2.1.*
+    - name: espressif/esp_h264
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4]
+      version: 1.3.0
+    - name: espressif/esp_ipa
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4]
+      version: 2.0.*
+    - name: idf
+      require: private
+      version: '>=5.4'
+    - name: espressif/usb_host_uvc
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4, esp32s3]
+      version: 2.4.*
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32p4
+    - esp32s3
+    - esp32c3
+    - esp32c5
+    - esp32c6
+    - esp32c61
+    - esp32s31
+    version: 2.1.0
+  espressif/esp_video_codec:
+    component_hash: a099580026841dc85398afb0526375368d5f61238cdb954f69998dcaa07bb9ed
+    dependencies:
+    - name: espressif/esp_h264
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32p4, esp32s3, esp32s31]
+      version: '*'
+    - name: espressif/esp_new_jpeg
+      registry_url: https://components.espressif.com
+      require: private
+      rules:
+      - if: target in [esp32, esp32s2, esp32s3, esp32p4, esp32c2, esp32c3, esp32c5, esp32c6, esp32c61, esp32h4, esp32s31]
+      version: '*'
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.5.5
+  espressif/esp_webrtc:
+    dependencies:
+    - name: espressif/nghttp
+      version: ~1.65.0
+    - name: espressif/esp_websocket_client
+      version: ~1.4.0
+    - name: espressif/esp_codec_dev
+      version: ~1.5
+    - name: espressif/esp_capture
+      version: ~0.8
+    - name: espressif/esp_peer
+      override_path: ../esp_peer
+    - name: tempotian/media_lib_utils
+      override_path: ../media_lib_utils
+      require: public
+      version: ~0.9
+    - name: tempotian/av_render
+      override_path: ../av_render
+      require: public
+      version: ~0.9
+    source:
+      path: C:\Users\ytq\work\ai\Heavy-punch\components\esp_webrtc
+      type: local
+    version: 0.9.0
+  espressif/esp_websocket_client:
+    component_hash: f77326f0e1c38da4e9c97e17c5d649b0dd13027f2645e720e48db269638fd622
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.4.0
+  espressif/gmf_audio:
+    component_hash: 0212351b217f527a74c9afb13061b418a9edbc7b4cdcbd78caa954e944de5151
+    dependencies:
+    - name: espressif/esp_audio_codec
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~2.4
+    - name: espressif/esp_audio_effects
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~1.2
+    - name: espressif/gmf_core
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^0.8
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.8.1
+  espressif/gmf_core:
+    component_hash: 6e11017fc41cdb19a8035e334c9e9caced803d67547fb0e60f69cba5fd735f6a
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.8.4
+  espressif/gmf_video:
+    component_hash: ddac0e94df5f6f697749ce601f156c274438c847cf1d481ce32fb208422a7b04
+    dependencies:
+    - name: espressif/esp_image_effects
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~1.1.0
+    - name: espressif/esp_video_codec
+      registry_url: https://components.espressif.com
+      require: private
+      version: ~0.5
+    - name: espressif/gmf_core
+      registry_url: https://components.espressif.com
+      require: private
+      version: ^0.8
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.8.7
+  espressif/media_lib_sal:
+    component_hash: ab439aa852ecde6f2510a755045eac0cad8a540f1c76096d4d08fdcf4e7753c2
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.1'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.9.3
+  espressif/nghttp:
+    component_hash: 3a1e3977701dea1ea90df840ad2bc6d2bfcb70439109e49568700c13070f7a5c
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 1.65.0~1
+  espressif/usb_host_uvc:
+    component_hash: f20c4e4dea50536e2e29daaf589b5f5984402284c155867daef27d6b64869f78
+    dependencies:
+    - name: idf
+      require: private
+      version: '>=5.0'
+    - name: espressif/usb
+      registry_url: https://components.espressif.com
+      require: public
+      rules:
+      - if: idf_version >=6.0
+      - if: target not in ["linux"]
+      version: ^1.0.0
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    targets:
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32h4
+    - linux
+    version: 2.4.2
   idf:
     source:
       type: idf
     version: 5.5.3
+  tempotian/av_render:
+    dependencies:
+    - name: espressif/esp_audio_codec
+      version: ~2.4.0
+    - name: espressif/esp_video_codec
+      version: ~0.5.2
+    - name: espressif/esp_audio_effects
+      version: ~1.2.0
+    - name: espressif/esp_codec_dev
+      version: ~1.5
+    - name: tempotian/media_lib_utils
+      override_path: ../media_lib_utils
+      version: ~0.9
+    source:
+      path: C:\Users\ytq\work\ai\Heavy-punch\components\av_render
+      type: local
+    version: 0.9.1
+  tempotian/media_lib_utils:
+    dependencies:
+    - name: espressif/media_lib_sal
+      require: public
+      version: ~0.9
+    source:
+      path: C:\Users\ytq\work\ai\Heavy-punch\components\media_lib_utils
+      type: local
+    version: 0.9.0
+  webrtc_utils:
+    dependencies: []
+    source:
+      path: C:\Users\ytq\work\ai\Heavy-punch\components\webrtc_utils
+      type: local
+    version: 0.9.0
 direct_dependencies:
-- espressif/esp32-camera
+- espressif/esp_audio_codec
+- espressif/esp_audio_effects
+- espressif/esp_capture
+- espressif/esp_codec_dev
+- espressif/esp_libsrtp
+- espressif/esp_peer
+- espressif/esp_video_codec
+- espressif/esp_webrtc
+- espressif/esp_websocket_client
+- espressif/media_lib_sal
+- espressif/nghttp
 - idf
-manifest_hash: 42e195e1486aa4f05b477bea9ebc3700a4a392a6c2173cee986cb6a36e8172b3
+- tempotian/av_render
+- tempotian/media_lib_utils
+- webrtc_utils
+manifest_hash: 02cb79816a580c2973c6547250f444dd61dc52f2207614004e4705dae033034a
 target: esp32s3
 version: 2.0.0

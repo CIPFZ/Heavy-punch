@@ -9,9 +9,10 @@
 #include "lwip/ip4_addr.h"
 #include "nvs_flash.h"
 
-#include "camera_stream.h"
 #include "camera_tilt.h"
+#include "media_sys.h"
 #include "track_drive.h"
+#include "webrtc_app.h"
 #include "web_server.h"
 
 #define AP_SSID "HeavyPunch-Track"
@@ -97,10 +98,11 @@ void app_main(void) {
 
   ESP_ERROR_CHECK(track_drive_init());
   ESP_ERROR_CHECK(camera_tilt_init());
-  ESP_ERROR_CHECK(camera_stream_init());
+  ESP_ERROR_CHECK(media_sys_init());
   ESP_ERROR_CHECK(wifi_init_ap());
   ESP_ERROR_CHECK(web_server_start());
-  ESP_ERROR_CHECK(camera_stream_start());
+  ESP_ERROR_CHECK(webrtc_app_init());
+  ESP_ERROR_CHECK(webrtc_app_start());
 
   xTaskCreate(drive_task, "drive_task", 3072, NULL, 12, NULL);
 }
