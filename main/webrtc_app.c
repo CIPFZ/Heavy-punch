@@ -166,6 +166,17 @@ static esp_err_t read_body(httpd_req_t *req, char **out) {
   return ESP_OK;
 }
 
+static void close_existing_sse(void) {
+  if (!sse_connected) {
+    return;
+  }
+  ESP_LOGW(TAG, "closing previous SSE listener");
+  sse_stopping = true;
+  for (int i = 0; i < 20 && sse_connected; ++i) {
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
+}
+
 esp_err_t webrtc_app_init(void) {
   signal_queue = xQueueCreate(SIGNAL_QUEUE_LEN, sizeof(char *));
   if (!signal_queue) {
@@ -252,12 +263,17 @@ esp_err_t webrtc_app_page_handler(httpd_req_t *req) {
 }
 
 esp_err_t webrtc_app_signal_get_handler(httpd_req_t *req) {
+  ESP_LOGI(TAG, "SSE listener request");
   httpd_resp_set_type(req, "text/event-stream");
   httpd_resp_set_hdr(req, "Cache-Control", "no-cache");
   httpd_resp_set_hdr(req, "Connection", "keep-alive");
   if (sse_connected) {
-    send_sse(req, "{\"error\":\"only one WebRTC listener allowed\"}");
-    return ESP_OK;
+    close_existing_sse();
+    if (sse_connected) {
+      ESP_LOGE(TAG, "previous SSE listener did not close");
+      send_sse(req, "{\"type\":\"error\",\"message\":\"previous listener still closing\"}");
+      return ESP_OK;
+    }
   }
   send_sse(req, "{\"type\":\"connected\"}");
   sse_connected = true;

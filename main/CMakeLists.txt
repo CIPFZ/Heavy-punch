@@ -7,6 +7,7 @@ idf_component_register(
         "track_math.c"
         "webrtc_app.c"
         "web_server.c"
+        "wifi_manager.c"
     INCLUDE_DIRS
         "."
 )
