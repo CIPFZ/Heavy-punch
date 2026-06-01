@@ -28,6 +28,7 @@ static esp_webrtc_handle_t webrtc;
 static httpd_req_t *sse_req;
 static bool sse_connected;
 static bool sse_stopping;
+static bool webrtc_started;
 
 static const char WEBRTC_HTML[] =
 "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no\"><title>Heavy Punch WebRTC</title><style>html,body{margin:0;height:100%;background:#05080d;color:#eaf6ff;font-family:system-ui,sans-serif;overflow:hidden}main{height:100%;display:grid;grid-template-rows:1fr auto;gap:10px;padding:10px}video{width:100%;height:100%;object-fit:contain;background:#000;border:1px solid #26384a;border-radius:8px}.bar{display:flex;gap:8px;align-items:center}button{height:44px;border-radius:8px;border:1px solid #416078;background:#172333;color:#eaf6ff;font-weight:900;padding:0 14px}.ok{color:#9ff4d0}.bad{color:#fecaca}</style></head><body><main><video id=\"remote\" autoplay playsinline muted></video><div class=\"bar\"><button id=\"connect\">CONNECT</button><button id=\"hangup\">HANGUP</button><span id=\"status\" class=\"bad\">idle</span></div></main><script>"
@@ -173,17 +174,27 @@ esp_err_t webrtc_app_init(void) {
 
   esp_peer_default_cfg_t peer_cfg = {
       .agent_recv_timeout = 100,
-      .rtp_cfg = {
-          .send_pool_size = 256 * 1024,
-          .send_queue_num = 128,
+      .data_ch_cfg = {
+          .recv_cache_size = 1536,
+          .send_cache_size = 1536,
       },
-      .max_candidates = 4,
+      .rtp_cfg = {
+          .audio_recv_jitter = {
+              .cache_size = 1024,
+          },
+          .video_recv_jitter = {
+              .cache_size = 1024,
+          },
+          .send_pool_size = 1024,
+          .send_queue_num = 10,
+      },
+      .max_candidates = 2,
       .ice_use_lite_mode = true,
   };
   esp_webrtc_cfg_t cfg = {
       .peer_cfg = {
           .video_info = {
-              .codec = ESP_PEER_VIDEO_CODEC_MJPEG,
+              .codec = ESP_PEER_VIDEO_CODEC_H264,
               .width = VIDEO_WIDTH,
               .height = VIDEO_HEIGHT,
               .fps = VIDEO_FPS,
@@ -206,20 +217,32 @@ esp_err_t webrtc_app_init(void) {
     ESP_LOGE(TAG, "esp_webrtc_open failed: %d", ret);
     return ESP_FAIL;
   }
-  esp_webrtc_media_provider_t provider = {0};
-  ESP_ERROR_CHECK(media_sys_get_provider(&provider));
-  esp_webrtc_set_media_provider(webrtc, &provider);
   esp_webrtc_set_event_handler(webrtc, on_webrtc_event, NULL);
   return ESP_OK;
 }
 
 esp_err_t webrtc_app_start(void) {
-  return esp_webrtc_start(webrtc) == 0 ? ESP_OK : ESP_FAIL;
+  if (webrtc_started) {
+    esp_webrtc_stop(webrtc);
+    webrtc_started = false;
+  }
+  esp_webrtc_media_provider_t provider = {0};
+  ESP_ERROR_CHECK(media_sys_get_provider(&provider));
+  ESP_ERROR_CHECK(esp_webrtc_set_media_provider(webrtc, &provider) == 0 ? ESP_OK : ESP_FAIL);
+  int cert_ret = esp_peer_pre_generate_cert();
+  ESP_LOGI(TAG, "esp_peer_pre_generate_cert ret=%d", cert_ret);
+  int ret = esp_webrtc_start(webrtc);
+  if (ret == 0) {
+    webrtc_started = true;
+    return ESP_OK;
+  }
+  return ESP_FAIL;
 }
 
 void webrtc_app_stop(void) {
   if (webrtc) {
     esp_webrtc_stop(webrtc);
+    webrtc_started = false;
   }
 }
 
@@ -240,6 +263,9 @@ esp_err_t webrtc_app_signal_get_handler(httpd_req_t *req) {
   sse_connected = true;
   httpd_req_async_handler_begin(req, &sse_req);
   xTaskCreate(signal_send_task, "webrtc_sse", 4096, NULL, 5, NULL);
+  if (webrtc_app_start() != ESP_OK) {
+    ESP_LOGE(TAG, "failed to start WebRTC for signaling client");
+  }
   return ESP_OK;
 }
 

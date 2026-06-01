@@ -7,6 +7,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "lwip/ip4_addr.h"
+#include "media_lib_adapter.h"
 #include "nvs_flash.h"
 
 #include "camera_tilt.h"
@@ -96,13 +97,13 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
+  ESP_ERROR_CHECK(media_lib_add_default_adapter());
   ESP_ERROR_CHECK(track_drive_init());
   ESP_ERROR_CHECK(camera_tilt_init());
   ESP_ERROR_CHECK(media_sys_init());
   ESP_ERROR_CHECK(wifi_init_ap());
-  ESP_ERROR_CHECK(web_server_start());
   ESP_ERROR_CHECK(webrtc_app_init());
-  ESP_ERROR_CHECK(webrtc_app_start());
+  ESP_ERROR_CHECK(web_server_start());
 
   xTaskCreate(drive_task, "drive_task", 3072, NULL, 12, NULL);
 }
