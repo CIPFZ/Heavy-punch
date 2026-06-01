@@ -1,5 +1,6 @@
 build/
 build_host/
+dependencies.lock
 monitor.out
 monitor.err
 sdkconfig

@@ -117,10 +117,6 @@ Camera pitch servo:
 
 ## Build
 
-This machine has ESP-IDF under:
-
-- `C:\Espressif\frameworks\esp-idf-v5.5.3`
-
 From an ESP-IDF PowerShell environment:
 
 ```powershell
@@ -128,10 +124,11 @@ idf.py set-target esp32s3
 idf.py build
 ```
 
-If ESP-IDF tools are not exported into `PATH`, run Espressif's export script first:
+If ESP-IDF tools are not exported into `PATH`, open an ESP-IDF PowerShell environment or run
+the export script from your local ESP-IDF installation first:
 
 ```powershell
-. C:\Espressif\frameworks\esp-idf-v5.5.3\export.ps1
+. <your-esp-idf-installation>\export.ps1
 idf.py build
 ```
 
