@@ -8,7 +8,7 @@ ESP-IDF firmware for an ESP32-S3 tracked vehicle with OV2640 FPV video, WebRTC b
 - AP SSID: `HeavyPunch-Track`
 - AP password: `12345678`
 - Control URL: `http://192.168.4.1`
-- Primary camera stream: ESP-WebRTC Solution with MJPEG send-only video.
+- Primary camera stream: ESP-WebRTC Solution with H264 send-only video.
 - WebRTC page and local signaling:
   - `GET /`
   - `GET /webrtc`
@@ -25,13 +25,13 @@ The current video profile is:
 - Sensor: OV2640
 - Capture stack: Espressif `esp_capture` DVP source
 - Browser transport: WebRTC
-- WebRTC video codec: MJPEG
+- WebRTC video codec: H264
 - Frame size: `QVGA 320x240`
 - Target frame rate: `20 fps`
 - Audio: disabled
 - Data channel: disabled
 
-MJPEG is intentional for this ESP32-S3 target. The board has no hardware H.264 encoder, and software H.264 at useful FPV settings competes with Wi-Fi, camera DMA, control handling, and PSRAM bandwidth.
+The browser WebRTC path uses H264 because mainstream browsers do not negotiate MJPEG as a WebRTC video codec. On ESP32-S3 this runs through the software H264 encoder, so QVGA is the conservative profile for stability.
 
 Browser note: WebRTC APIs are normally tied to secure contexts. Some browsers allow WebRTC on private/local origins during development, while others may require HTTPS or browser flags. The firmware currently uses local HTTP signaling on the ESP32 AP to keep the embedded server small and focused.
 
@@ -105,7 +105,7 @@ Camera pitch servo:
 
 - `main/app_main.c`: NVS, track/tilt init, media init, Wi-Fi AP, web server, WebRTC startup
 - `main/media_sys.c`: OV2640 DVP camera source and `esp_capture` provider
-- `main/webrtc_app.c`: `esp_webrtc` MJPEG send-only peer and local SSE/POST signaling
+- `main/webrtc_app.c`: `esp_webrtc` H264 send-only peer and local SSE/POST signaling
 - `main/camera_tilt.c`: FPV camera pitch servo output
 - `main/track_math.c`: percentage-to-PWM mapping, command parsing, slew helper
 - `main/track_drive.c`: GPIO and LEDC hardware output

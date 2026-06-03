@@ -1,11 +1,15 @@
 #include "web_server.h"
 
 #include <stdlib.h>
+#include <stdint.h>
 #include <string.h>
+#include <errno.h>
 
 #include "esp_http_server.h"
 #include "esp_log.h"
 #include "cJSON.h"
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
 
 #include "camera_tilt.h"
 #include "track_drive.h"
@@ -16,6 +20,46 @@
 
 static const char *TAG = "web_server";
 static httpd_handle_t server;
+
+static bool sockaddr_to_ipv4(const struct sockaddr_storage *addr, char *ip, size_t ip_size) {
+  if (addr->ss_family == AF_INET) {
+    const struct sockaddr_in *in = (const struct sockaddr_in *)addr;
+    return inet_ntop(AF_INET, &in->sin_addr, ip, ip_size) != NULL;
+  }
+  if (addr->ss_family == AF_INET6) {
+    const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)addr;
+    const uint8_t *bytes = (const uint8_t *)&in6->sin6_addr;
+    const bool v4mapped = memcmp(bytes, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12) == 0;
+    if (v4mapped) {
+      struct in_addr in4 = {0};
+      memcpy(&in4, bytes + 12, sizeof(in4));
+      return inet_ntop(AF_INET, &in4, ip, ip_size) != NULL;
+    }
+  }
+  return false;
+}
+
+static esp_err_t session_open_handler(httpd_handle_t hd, int sockfd) {
+  struct sockaddr_storage addr = {0};
+  socklen_t addr_len = sizeof(addr);
+  if (getpeername(sockfd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    ESP_LOGW(TAG, "session peer lookup failed sockfd=%d errno=%d", sockfd, errno);
+    return ESP_OK;
+  }
+
+  char *ip = calloc(1, INET_ADDRSTRLEN);
+  if (ip == NULL) {
+    return ESP_ERR_NO_MEM;
+  }
+  if (!sockaddr_to_ipv4(&addr, ip, INET_ADDRSTRLEN)) {
+    ESP_LOGW(TAG, "unsupported session peer address family=%d", addr.ss_family);
+    free(ip);
+    return ESP_OK;
+  }
+  httpd_sess_set_ctx(hd, sockfd, ip, free);
+  ESP_LOGD(TAG, "http session peer ip=%s", ip);
+  return ESP_OK;
+}
 
 static int16_t clamp_percent(long value) {
   if (value < -100) {
@@ -185,6 +229,7 @@ esp_err_t web_server_start(void) {
   config.max_open_sockets = 8;
   config.max_uri_handlers = 8;
   config.lru_purge_enable = true;
+  config.open_fn = session_open_handler;
 
   esp_err_t err = httpd_start(&server, &config);
   if (err != ESP_OK) {

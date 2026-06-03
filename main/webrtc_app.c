@@ -2,6 +2,8 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
+#include <stdint.h>
 
 #include "cJSON.h"
 #include "esp_log.h"
@@ -13,6 +15,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "lwip/inet.h"
+#include "lwip/sockets.h"
 #include "media_sys.h"
 
 #define SIGNAL_QUEUE_LEN 8
@@ -28,7 +32,26 @@ static esp_webrtc_handle_t webrtc;
 static httpd_req_t *sse_req;
 static bool sse_connected;
 static bool sse_stopping;
+static bool suppress_sse_stop;
 static bool webrtc_started;
+
+static void signaling_connect_task(void *arg) {
+  esp_peer_signaling_cfg_t cfg = *(esp_peer_signaling_cfg_t *)arg;
+  free(arg);
+
+  vTaskDelay(pdMS_TO_TICKS(50));
+  esp_peer_signaling_ice_info_t ice = {
+      .is_initiator = true,
+  };
+  ESP_LOGI(TAG, "local signaling connected");
+  if (cfg.on_ice_info) {
+    cfg.on_ice_info(&ice, cfg.ctx);
+  }
+  if (cfg.on_connected) {
+    cfg.on_connected(cfg.ctx);
+  }
+  vTaskDelete(NULL);
+}
 
 static const char WEBRTC_HTML[] =
 "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no\"><title>Heavy Punch WebRTC</title><style>html,body{margin:0;height:100%;background:#05080d;color:#eaf6ff;font-family:system-ui,sans-serif;overflow:hidden}main{height:100%;display:grid;grid-template-rows:1fr auto;gap:10px;padding:10px}video{width:100%;height:100%;object-fit:contain;background:#000;border:1px solid #26384a;border-radius:8px}.bar{display:flex;gap:8px;align-items:center}button{height:44px;border-radius:8px;border:1px solid #416078;background:#172333;color:#eaf6ff;font-weight:900;padding:0 14px}.ok{color:#9ff4d0}.bad{color:#fecaca}</style></head><body><main><video id=\"remote\" autoplay playsinline muted></video><div class=\"bar\"><button id=\"connect\">CONNECT</button><button id=\"hangup\">HANGUP</button><span id=\"status\" class=\"bad\">idle</span></div></main><script>"
@@ -36,15 +59,117 @@ static const char WEBRTC_HTML[] =
 "</script></body></html>";
 
 static int send_sse(httpd_req_t *req, const char *data) {
-  const int len = strlen(data) + 8;
+  const int len = strlen(data) + strlen("data: \n\n") + 1;
   char *buf = malloc(len);
   if (buf == NULL) {
     return -1;
   }
   const int written = snprintf(buf, len, "data: %s\n\n", data);
+  if (written < 0 || written >= len) {
+    free(buf);
+    return -1;
+  }
   int ret = httpd_resp_send_chunk(req, buf, written);
   free(buf);
   return ret;
+}
+
+static char *replace_sdp_direction(const char *sdp) {
+  const char *inactive = "a=inactive";
+  const char *sendonly = "a=sendonly";
+  const char *pos = strstr(sdp, inactive);
+  if (pos == NULL) {
+    return strdup(sdp);
+  }
+
+  const size_t prefix_len = pos - sdp;
+  const size_t inactive_len = strlen(inactive);
+  const size_t sendonly_len = strlen(sendonly);
+  const size_t suffix_len = strlen(pos + inactive_len);
+  char *out = malloc(prefix_len + sendonly_len + suffix_len + 1);
+  if (out == NULL) {
+    return NULL;
+  }
+  memcpy(out, sdp, prefix_len);
+  memcpy(out + prefix_len, sendonly, sendonly_len);
+  memcpy(out + prefix_len + sendonly_len, pos + inactive_len, suffix_len + 1);
+  return out;
+}
+
+static bool get_request_peer_ip(httpd_req_t *req, char *ip, size_t ip_size) {
+  const char *req_ip = (const char *)req->sess_ctx;
+  if (req_ip != NULL && req_ip[0] != '\0') {
+    strlcpy(ip, req_ip, ip_size);
+    return true;
+  }
+
+  int sockfd = httpd_req_to_sockfd(req);
+  if (sockfd < 0) {
+    ESP_LOGW(TAG, "httpd_req_to_sockfd failed");
+    return false;
+  }
+
+  const char *session_ip = (const char *)httpd_sess_get_ctx(req->handle, sockfd);
+  if (session_ip != NULL && session_ip[0] != '\0') {
+    strlcpy(ip, session_ip, ip_size);
+    return true;
+  }
+
+  struct sockaddr_storage addr = {0};
+  socklen_t addr_len = sizeof(addr);
+  if (getpeername(sockfd, (struct sockaddr *)&addr, &addr_len) != 0) {
+    ESP_LOGW(TAG, "getpeername failed sockfd=%d errno=%d", sockfd, errno);
+    return false;
+  }
+
+  if (addr.ss_family == AF_INET) {
+    const struct sockaddr_in *in = (const struct sockaddr_in *)&addr;
+    return inet_ntop(AF_INET, &in->sin_addr, ip, ip_size) != NULL;
+  }
+  if (addr.ss_family == AF_INET6) {
+    const struct sockaddr_in6 *in6 = (const struct sockaddr_in6 *)&addr;
+    const uint8_t *bytes = (const uint8_t *)&in6->sin6_addr;
+    const bool v4mapped = memcmp(bytes, "\0\0\0\0\0\0\0\0\0\0\xff\xff", 12) == 0;
+    if (v4mapped) {
+      struct in_addr in4 = {0};
+      memcpy(&in4, bytes + 12, sizeof(in4));
+      return inet_ntop(AF_INET, &in4, ip, ip_size) != NULL;
+    }
+  }
+  return false;
+}
+
+static char *rewrite_mdns_candidate(const char *candidate, const char *peer_ip) {
+  if (strstr(candidate, ".local") == NULL || peer_ip == NULL || peer_ip[0] == '\0') {
+    return strdup(candidate);
+  }
+
+  const char *p = candidate;
+  for (int field = 0; field < 4; ++field) {
+    p = strchr(p, ' ');
+    if (p == NULL) {
+      return strdup(candidate);
+    }
+    ++p;
+  }
+  const char *addr_start = p;
+  const char *addr_end = strchr(addr_start, ' ');
+  if (addr_end == NULL) {
+    return strdup(candidate);
+  }
+
+  const size_t prefix_len = addr_start - candidate;
+  const size_t ip_len = strlen(peer_ip);
+  const size_t suffix_len = strlen(addr_end);
+  char *out = malloc(prefix_len + ip_len + suffix_len + 1);
+  if (out == NULL) {
+    return NULL;
+  }
+  memcpy(out, candidate, prefix_len);
+  memcpy(out + prefix_len, peer_ip, ip_len);
+  memcpy(out + prefix_len + ip_len, addr_end, suffix_len + 1);
+  ESP_LOGI(TAG, "rewrite mDNS ICE candidate to peer ip=%s", peer_ip);
+  return out;
 }
 
 static void signal_send_task(void *arg) {
@@ -76,12 +201,16 @@ static void signal_send_task(void *arg) {
 
 static int signaling_start(esp_peer_signaling_cfg_t *cfg, esp_peer_signaling_handle_t *sig) {
   signal_cfg = *cfg;
-  esp_peer_signaling_ice_info_t ice = {
-      .is_initiator = true,
-  };
-  signal_cfg.on_ice_info(&ice, cfg->ctx);
-  signal_cfg.on_connected(cfg->ctx);
   *sig = signal_queue;
+  esp_peer_signaling_cfg_t *task_cfg = malloc(sizeof(*task_cfg));
+  if (task_cfg == NULL) {
+    return -1;
+  }
+  *task_cfg = *cfg;
+  if (xTaskCreate(signaling_connect_task, "webrtc_sig", 4096, task_cfg, 5, NULL) != pdPASS) {
+    free(task_cfg);
+    return -1;
+  }
   return 0;
 }
 
@@ -95,11 +224,20 @@ static int signaling_send_msg(esp_peer_signaling_handle_t sig, esp_peer_signalin
   }
 
   switch (msg->type) {
-    case ESP_PEER_SIGNALING_MSG_SDP:
+    case ESP_PEER_SIGNALING_MSG_SDP: {
+      ESP_LOGI(TAG, "queue SDP offer size=%d", msg->size);
+      char *sdp = replace_sdp_direction((const char *)msg->data);
+      if (sdp == NULL) {
+        cJSON_Delete(root);
+        return -1;
+      }
       cJSON_AddStringToObject(root, "type", "offer");
-      cJSON_AddStringToObject(root, "sdp", (const char *)msg->data);
+      cJSON_AddStringToObject(root, "sdp", sdp);
+      free(sdp);
       break;
+    }
     case ESP_PEER_SIGNALING_MSG_CANDIDATE:
+      ESP_LOGI(TAG, "queue ICE candidate size=%d", msg->size);
       cJSON_AddStringToObject(root, "type", "candidate");
       cJSON_AddStringToObject(root, "candidate", (const char *)msg->data);
       break;
@@ -122,6 +260,7 @@ static int signaling_send_msg(esp_peer_signaling_handle_t sig, esp_peer_signalin
   }
 
   if (xQueueSend(signal_queue, &json, pdMS_TO_TICKS(100)) != pdTRUE) {
+    ESP_LOGW(TAG, "signal queue full; drop msg type=%d", msg->type);
     free(json);
   }
   return 0;
@@ -129,7 +268,7 @@ static int signaling_send_msg(esp_peer_signaling_handle_t sig, esp_peer_signalin
 
 static int signaling_stop(esp_peer_signaling_handle_t sig) {
   (void)sig;
-  if (sse_connected) {
+  if (sse_connected && !suppress_sse_stop) {
     sse_stopping = true;
   }
   return 0;
@@ -177,6 +316,13 @@ static void close_existing_sse(void) {
   }
 }
 
+static void drain_signal_queue(void) {
+  char *msg = NULL;
+  while (xQueueReceive(signal_queue, &msg, 0) == pdTRUE) {
+    free(msg);
+  }
+}
+
 esp_err_t webrtc_app_init(void) {
   signal_queue = xQueueCreate(SIGNAL_QUEUE_LEN, sizeof(char *));
   if (!signal_queue) {
@@ -184,7 +330,7 @@ esp_err_t webrtc_app_init(void) {
   }
 
   esp_peer_default_cfg_t peer_cfg = {
-      .agent_recv_timeout = 100,
+      .agent_recv_timeout = 1000,
       .data_ch_cfg = {
           .recv_cache_size = 1536,
           .send_cache_size = 1536,
@@ -196,7 +342,7 @@ esp_err_t webrtc_app_init(void) {
           .video_recv_jitter = {
               .cache_size = 1024,
           },
-          .send_pool_size = 1024,
+          .send_pool_size = 4096,
           .send_queue_num = 10,
       },
       .max_candidates = 2,
@@ -234,7 +380,10 @@ esp_err_t webrtc_app_init(void) {
 
 esp_err_t webrtc_app_start(void) {
   if (webrtc_started) {
+    const bool keep_current_sse = sse_connected && !sse_stopping;
+    suppress_sse_stop = keep_current_sse;
     esp_webrtc_stop(webrtc);
+    suppress_sse_stop = false;
     webrtc_started = false;
   }
   esp_webrtc_media_provider_t provider = {0};
@@ -244,9 +393,11 @@ esp_err_t webrtc_app_start(void) {
   ESP_LOGI(TAG, "esp_peer_pre_generate_cert ret=%d", cert_ret);
   int ret = esp_webrtc_start(webrtc);
   if (ret == 0) {
+    ESP_LOGI(TAG, "esp_webrtc_start ok");
     webrtc_started = true;
     return ESP_OK;
   }
+  ESP_LOGE(TAG, "esp_webrtc_start failed: %d", ret);
   return ESP_FAIL;
 }
 
@@ -277,6 +428,8 @@ esp_err_t webrtc_app_signal_get_handler(httpd_req_t *req) {
   }
   send_sse(req, "{\"type\":\"connected\"}");
   sse_connected = true;
+  sse_stopping = false;
+  drain_signal_queue();
   httpd_req_async_handler_begin(req, &sse_req);
   xTaskCreate(signal_send_task, "webrtc_sse", 4096, NULL, 5, NULL);
   if (webrtc_app_start() != ESP_OK) {
@@ -286,6 +439,11 @@ esp_err_t webrtc_app_signal_get_handler(httpd_req_t *req) {
 }
 
 esp_err_t webrtc_app_signal_post_handler(httpd_req_t *req) {
+  char peer_ip[INET_ADDRSTRLEN] = {0};
+  if (!get_request_peer_ip(req, peer_ip, sizeof(peer_ip))) {
+    ESP_LOGW(TAG, "failed to get signaling POST peer IP");
+  }
+
   char *body = NULL;
   if (read_body(req, &body) != ESP_OK) {
     httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "bad body");
@@ -302,16 +460,30 @@ esp_err_t webrtc_app_signal_post_handler(httpd_req_t *req) {
   const cJSON *type = cJSON_GetObjectItem(root, "type");
   const cJSON *sdp = cJSON_GetObjectItem(root, "sdp");
   const cJSON *candidate = cJSON_GetObjectItem(root, "candidate");
+  char *candidate_rewrite = NULL;
   esp_peer_signaling_msg_t msg = {0};
   if (cJSON_IsString(type) && strcmp(type->valuestring, "answer") == 0 && cJSON_IsString(sdp)) {
+    ESP_LOGI(TAG, "received SDP answer size=%d", strlen(sdp->valuestring));
     msg.type = ESP_PEER_SIGNALING_MSG_SDP;
     msg.data = (uint8_t *)sdp->valuestring;
     msg.size = strlen(sdp->valuestring);
   } else if (cJSON_IsString(type) && strcmp(type->valuestring, "candidate") == 0 &&
              cJSON_IsString(candidate)) {
+    ESP_LOGI(TAG, "received ICE candidate size=%d", strlen(candidate->valuestring));
+    if (peer_ip[0] != '\0') {
+      candidate_rewrite = rewrite_mdns_candidate(candidate->valuestring, peer_ip);
+    } else {
+      candidate_rewrite = strdup(candidate->valuestring);
+    }
+    if (candidate_rewrite == NULL) {
+      cJSON_Delete(root);
+      free(body);
+      httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "candidate rewrite failed");
+      return ESP_FAIL;
+    }
     msg.type = ESP_PEER_SIGNALING_MSG_CANDIDATE;
-    msg.data = (uint8_t *)candidate->valuestring;
-    msg.size = strlen(candidate->valuestring);
+    msg.data = (uint8_t *)candidate_rewrite;
+    msg.size = strlen(candidate_rewrite);
   } else if (cJSON_IsString(type) && strcmp(type->valuestring, "bye") == 0) {
     msg.type = ESP_PEER_SIGNALING_MSG_BYE;
   }
@@ -320,6 +492,7 @@ esp_err_t webrtc_app_signal_post_handler(httpd_req_t *req) {
     signal_cfg.on_msg(&msg, signal_cfg.ctx);
   }
   cJSON_Delete(root);
+  free(candidate_rewrite);
   free(body);
   return httpd_resp_sendstr(req, "OK");
 }

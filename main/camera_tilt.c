@@ -30,7 +30,7 @@ static int16_t clamp_percent(int16_t value) {
 }
 
 static uint32_t percent_to_duty(int16_t percent) {
-  percent = clamp_percent(percent);
+  percent = (int16_t)-clamp_percent(percent);
   const int32_t offset_us = percent >= 0
                                 ? ((int32_t)(TILT_MAX_US - TILT_CENTER_US) * percent) / 100
                                 : ((int32_t)(TILT_CENTER_US - TILT_MIN_US) * percent) / 100;
