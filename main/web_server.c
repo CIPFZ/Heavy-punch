@@ -12,8 +12,7 @@
 #include "lwip/tcp.h"
 
 #include "camera_stream.h"
-#include "camera_tilt.h"
-#include "track_drive.h"
+#include "control_loop.h"
 #include "track_math.h"
 #include "web_ui.h"
 
@@ -40,14 +39,16 @@ static esp_err_t dispatch_control_message(const char *message) {
   }
 
   if (strcmp(message, "stop") == 0) {
-    track_drive_stop();
+    control_loop_submit_stop();
     return ESP_OK;
   }
 
   int16_t left = 0;
   int16_t right = 0;
   if (track_parse_command(message, &left, &right)) {
-    track_drive_set_percent(left, right);
+    if (!control_loop_submit_tracks(left, right)) {
+      ESP_LOGW(TAG, "failed to submit track command");
+    }
     return ESP_OK;
   }
 
@@ -57,7 +58,9 @@ static esp_err_t dispatch_control_message(const char *message) {
     const char *value_start = message + sizeof(tilt_prefix) - 1;
     const long value = strtol(value_start, &end, 10);
     if (end != value_start && end != NULL && *end == '\0') {
-      camera_tilt_set_percent(clamp_percent(value));
+      if (!control_loop_submit_tilt(clamp_percent(value))) {
+        ESP_LOGW(TAG, "failed to submit tilt command");
+      }
     }
     return ESP_OK;
   }
@@ -125,7 +128,7 @@ static void video_ws_task(void *arg) {
     vTaskDelete(NULL);
   }
 
-  ESP_LOGI(TAG, "video websocket connected");
+  ESP_LOGI(TAG, "video_ws connected on core %d", xPortGetCoreID());
   uint32_t last_seq = 0;
   while (true) {
     camera_stream_wait_for_frame(last_seq);
@@ -155,7 +158,7 @@ static void video_ws_task(void *arg) {
 
   free(scratch);
   httpd_sess_trigger_close(server, fd);
-  ESP_LOGI(TAG, "video websocket disconnected");
+  ESP_LOGI(TAG, "video_ws disconnected");
   vTaskDelete(NULL);
 }
 
@@ -190,6 +193,7 @@ esp_err_t web_server_start(void) {
   config.max_uri_handlers = 4;
   config.lru_purge_enable = true;
 
+  ESP_LOGI(TAG, "httpd configured for core %d", config.core_id);
   esp_err_t err = httpd_start(&server, &config);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "httpd_start failed: %s", esp_err_to_name(err));

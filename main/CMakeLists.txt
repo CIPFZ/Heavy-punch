@@ -1,6 +1,7 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "control_loop.c"
         "camera_stream.c"
         "camera_tilt.c"
         "track_drive.c"

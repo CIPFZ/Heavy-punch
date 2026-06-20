@@ -5,13 +5,11 @@
 #include "esp_netif.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "lwip/ip4_addr.h"
 #include "nvs_flash.h"
 
 #include "camera_stream.h"
-#include "camera_tilt.h"
-#include "track_drive.h"
+#include "control_loop.h"
 #include "web_server.h"
 
 #define AP_SSID "HeavyPunch-Track"
@@ -35,14 +33,6 @@ static void wifi_event_handler(void *arg, esp_event_base_t event_base, int32_t e
     const wifi_event_ap_stadisconnected_t *event =
         (const wifi_event_ap_stadisconnected_t *)event_data;
     ESP_LOGI(TAG, "station disconnected: " MACSTR " aid=%d", MAC2STR(event->mac), event->aid);
-  }
-}
-
-static void drive_task(void *arg) {
-  (void)arg;
-  while (true) {
-    track_drive_update();
-    vTaskDelay(pdMS_TO_TICKS(5));
   }
 }
 
@@ -95,12 +85,10 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
-  ESP_ERROR_CHECK(track_drive_init());
-  ESP_ERROR_CHECK(camera_tilt_init());
+  ESP_ERROR_CHECK(control_loop_init());
   ESP_ERROR_CHECK(camera_stream_init());
   ESP_ERROR_CHECK(wifi_init_ap());
   ESP_ERROR_CHECK(web_server_start());
   ESP_ERROR_CHECK(camera_stream_start());
-
-  xTaskCreate(drive_task, "drive_task", 3072, NULL, 12, NULL);
+  ESP_ERROR_CHECK(control_loop_start());
 }

@@ -181,7 +181,7 @@ static esp_err_t socket_send_all(int fd, const void *data, size_t len) {
 
 static void camera_capture_task(void *arg) {
   (void)arg;
-  ESP_LOGI(TAG, "capture task started on core %d", xPortGetCoreID());
+  ESP_LOGI(TAG, "camera_capture started on core %d", xPortGetCoreID());
   TickType_t last_wake = xTaskGetTickCount();
 
   while (true) {
@@ -253,7 +253,7 @@ static void stream_client_task(void *arg) {
   const int client_fd = (int)(intptr_t)arg;
   char part_buf[72];
 
-  ESP_LOGI(TAG, "stream client connected");
+  ESP_LOGI(TAG, "mjpeg_client connected on core %d", xPortGetCoreID());
   uint8_t *scratch = heap_caps_malloc(CAMERA_LATEST_FRAME_MAX_BYTES, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
   if (scratch == NULL) {
     scratch = heap_caps_malloc(CAMERA_LATEST_FRAME_MAX_BYTES, MALLOC_CAP_8BIT);
@@ -297,12 +297,13 @@ static void stream_client_task(void *arg) {
   shutdown(client_fd, 0);
   close(client_fd);
   xSemaphoreGive(stream_client_slots);
-  ESP_LOGI(TAG, "stream client disconnected");
+  ESP_LOGI(TAG, "mjpeg_client disconnected");
   vTaskDelete(NULL);
 }
 
 static void stream_server_task(void *arg) {
   (void)arg;
+  ESP_LOGI(TAG, "mjpeg_server started on core %d", xPortGetCoreID());
 
   const int listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
   if (listen_fd < 0) {
@@ -452,7 +453,7 @@ esp_err_t camera_stream_init(void) {
 
 esp_err_t camera_stream_start(void) {
   BaseType_t ok = xTaskCreatePinnedToCore(stream_server_task, "mjpeg_server", 4096, NULL, 4,
-                                         &stream_server_task_handle, 1);
+                                         &stream_server_task_handle, 0);
   if (ok != pdPASS) {
     return ESP_ERR_NO_MEM;
   }
