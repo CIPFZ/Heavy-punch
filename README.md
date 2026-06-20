@@ -26,7 +26,7 @@ The current video test profile is:
 - Capture limit: about `20 fps`
 - Maximum MJPEG clients: `5`
 
-Camera capture is isolated from network streaming. A dedicated capture task reads the OV2640 on Core 1 and stores the latest JPEG frame in PSRAM. WebSocket video clients, fallback MJPEG clients, and snapshots read from that latest-frame cache, so slow network clients do not directly block sensor capture.
+Camera capture is isolated from network streaming. A dedicated capture task reads the OV2640 on Core 1 and stores the latest JPEG frame in PSRAM. WebSocket video clients, fallback MJPEG clients, and snapshots read from that latest-frame cache, so slow network clients do not directly block sensor capture. Video sockets use `TCP_NODELAY` and a short send timeout so slow clients are disconnected instead of building latency indefinitely.
 
 The firmware does not use H.264/H.265. ESP32-S3 has no hardware H.264 encoder, and software H.264 encoding at useful FPV resolutions competes with Wi-Fi, camera DMA, control handling, and PSRAM bandwidth. For higher-resolution smooth video, the practical hardware path is a camera/SoC with hardware video encoding or an external encoder.
 
@@ -42,6 +42,7 @@ The phone UI has two vertical levers, matching real dual-track controls:
 - Holding a lever position keeps that track running at the corresponding percentage.
 - Releasing a lever returns that track to `0%`.
 - The `STOP` button immediately brakes both tracks.
+- The `CENTER` button returns the camera tilt servo to `0%`.
 
 The WebSocket control path is intentionally simple:
 
@@ -55,7 +56,8 @@ Safety behavior:
 
 - If the browser disconnects, goes hidden, loses focus, or stops sending control frames, the firmware stops the tracks.
 - Firmware command timeout is `350 ms`.
-- The UI sends repeated track and tilt frames every `120 ms` while open.
+- The UI sends repeated track frames every `120 ms` while open.
+- Camera tilt commands are sent on change with a short client-side throttle, plus a low-rate keepalive.
 - The UI prevents browser double-tap zoom and reconnects the control WebSocket automatically after a refresh or network drop.
 
 ## Pin Mapping

@@ -182,6 +182,7 @@ static esp_err_t socket_send_all(int fd, const void *data, size_t len) {
 static void camera_capture_task(void *arg) {
   (void)arg;
   ESP_LOGI(TAG, "capture task started on core %d", xPortGetCoreID());
+  TickType_t last_wake = xTaskGetTickCount();
 
   while (true) {
     camera_fb_t *fb = esp_camera_fb_get();
@@ -204,7 +205,7 @@ static void camera_capture_task(void *arg) {
     }
 
     esp_camera_fb_return(fb);
-    vTaskDelay(pdMS_TO_TICKS(1));
+    vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(CAMERA_CAPTURE_INTERVAL_MS));
   }
 }
 

@@ -18,6 +18,7 @@
 #define TILT_PERIOD_US 20000
 
 static const char *TAG = "camera_tilt";
+static int16_t current_percent = CAMERA_TILT_DEFAULT_PERCENT;
 
 static int16_t clamp_percent(int16_t value) {
   if (value < CAMERA_TILT_MIN_PERCENT) {
@@ -58,6 +59,7 @@ esp_err_t camera_tilt_init(void) {
       .hpoint = 0,
   };
   ESP_RETURN_ON_ERROR(ledc_channel_config(&channel_conf), TAG, "tilt ledc channel config failed");
+  current_percent = CAMERA_TILT_DEFAULT_PERCENT;
 
   ESP_LOGI(TAG, "initialized: gpio=%d range=%dus..%dus center=%dus", TILT_SERVO_GPIO, TILT_MIN_US,
            TILT_MAX_US, TILT_CENTER_US);
@@ -65,6 +67,11 @@ esp_err_t camera_tilt_init(void) {
 }
 
 void camera_tilt_set_percent(int16_t percent) {
+  percent = clamp_percent(percent);
+  if (percent == current_percent) {
+    return;
+  }
+  current_percent = percent;
   const uint32_t duty = percent_to_duty(percent);
   ledc_set_duty(TILT_PWM_MODE, TILT_PWM_CHANNEL, duty);
   ledc_update_duty(TILT_PWM_MODE, TILT_PWM_CHANNEL);

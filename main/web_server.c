@@ -8,6 +8,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "lwip/sockets.h"
+#include "lwip/tcp.h"
 
 #include "camera_stream.h"
 #include "camera_tilt.h"
@@ -103,6 +105,14 @@ static void video_ws_task(void *arg) {
   video_ws_client_t *client = (video_ws_client_t *)arg;
   const int fd = client->fd;
   free(client);
+
+  const int flag = 1;
+  setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag));
+  struct timeval timeout = {
+      .tv_sec = 0,
+      .tv_usec = 200000,
+  };
+  setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
 
   uint8_t *scratch =
       heap_caps_malloc(camera_stream_max_frame_bytes(), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
