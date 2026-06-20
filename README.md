@@ -1,6 +1,6 @@
 # Heavy Punch FPV Track Drive
 
-ESP-IDF firmware for an ESP32-S3 tracked vehicle with OV2640 FPV video and dual-track motor control. Turret, barrel, fire-servo, chat, sensor, and display features remain outside the runtime surface.
+ESP-IDF firmware for an ESP32-S3 tracked vehicle with OV2640 FPV video, dual-track motor control, and camera tilt servo control. Turret, barrel, fire-servo, chat, sensor, and display features remain outside the runtime surface.
 
 ## Runtime
 
@@ -11,7 +11,7 @@ ESP-IDF firmware for an ESP32-S3 tracked vehicle with OV2640 FPV video and dual-
 - Primary camera stream: WebSocket binary JPEG at `ws://192.168.4.1/video-ws`
 - Fallback camera stream: `http://192.168.4.1:81/stream`
 - Snapshot: `http://192.168.4.1/capture.jpg`
-- The page uses a WebSocket at `/ws`.
+- The page uses a control WebSocket at `/ws`.
 - The access point is configured for up to 5 client devices.
 
 ## Video
@@ -43,7 +43,7 @@ The phone UI has two vertical levers, matching real dual-track controls:
 - Releasing a lever returns that track to `0%`.
 - The `STOP` button immediately brakes both tracks.
 
-The WebSocket control path is intentionally simple. The page sends full dual-track commands only:
+The WebSocket control path is intentionally simple:
 
 - `tracks:<left>:<right>`
 - `tilt:<percent>`
@@ -55,7 +55,7 @@ Safety behavior:
 
 - If the browser disconnects, goes hidden, loses focus, or stops sending control frames, the firmware stops the tracks.
 - Firmware command timeout is `350 ms`.
-- The UI sends repeated track frames every `160 ms` while open.
+- The UI sends repeated track and tilt frames every `120 ms` while open.
 - The UI prevents browser double-tap zoom and reconnects the control WebSocket automatically after a refresh or network drop.
 
 ## Pin Mapping
