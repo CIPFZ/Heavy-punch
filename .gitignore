@@ -5,6 +5,7 @@ monitor.err
 sdkconfig
 sdkconfig.old
 managed_components/
+scratch/
 .zclaw_web_api_key
 .venv/
 .venv_py314_backup/
