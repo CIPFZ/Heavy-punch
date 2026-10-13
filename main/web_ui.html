@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Heavy Punch Track</title>
+<style>
+:root{--line:#31445f;--text:#e9f2ff;--muted:#91a8c1;--accent:#25c2a0;--warn:#ffb020;--danger:#f04438}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:linear-gradient(160deg,#08111f,#142235 58%,#101827);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI","Microsoft YaHei",sans-serif;-webkit-tap-highlight-color:transparent;touch-action:none}
+.top{position:fixed;top:0;left:0;right:0;height:48px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px 12px;background:#08111fcc;border-bottom:1px solid #263954;z-index:3}
+.brand{font-weight:800;font-size:14px;letter-spacing:.08em}
+.pills{display:flex;gap:6px;align-items:center}
+.pill{font-size:11px;color:var(--muted);border:1px solid #354a67;border-radius:999px;padding:4px 9px;font-weight:700;white-space:nowrap}
+.pill.ok{color:#9ff4d0;border-color:#287f6c}
+.pill.bad{color:#ffc4bd;border-color:#8e3d37}
+.pill.warn{color:#ffe0a3;border-color:#8a6a1f}
+.pill.run{color:#9ff4d0;border-color:#25c2a0;background:#25c2a022}
+.wrap{height:100%;padding:60px 12px 84px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.leverBox{min-width:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;background:#101d2ecc;border:1px solid var(--line);border-radius:8px;padding:12px;transition:opacity .2s}
+.leverBox.off{opacity:.35}
+.label{font-size:13px;color:var(--muted);font-weight:700;letter-spacing:.06em}
+.value{font-size:28px;font-weight:900;font-variant-numeric:tabular-nums}
+.slot{position:relative;width:min(34vw,150px);height:min(62vh,500px);min-height:240px;border-radius:8px;border:1px solid #49627f;background:linear-gradient(180deg,#09121f,#1c2d43);box-shadow:inset 0 14px 28px #0008}
+.zero{position:absolute;left:10px;right:10px;top:50%;height:2px;background:#6f86a3}
+.scale{position:absolute;left:50%;top:10px;bottom:10px;width:1px;background:#334963}
+.knob{position:absolute;left:10px;right:10px;height:54px;border-radius:8px;border:1px solid #a6ffe8;background:linear-gradient(180deg,#42e8be,#13977e);box-shadow:0 10px 18px #0008;display:flex;align-items:center;justify-content:center;color:#03251f;font-weight:900}
+.meter{height:8px;width:min(34vw,150px);background:#26364b;border-radius:999px;overflow:hidden}
+.fill{height:100%;width:0;background:var(--accent)}
+.actual{font-size:11px;color:var(--muted)}
+.bar{position:fixed;left:0;right:0;bottom:0;display:flex;gap:10px;justify-content:center;padding:12px;z-index:4;background:#08111fcc;border-top:1px solid #263954}
+button{border-radius:8px;height:48px;min-width:140px;font-size:15px;font-weight:900;color:#fff;box-shadow:0 8px 18px #0009}
+button:disabled{opacity:.4}
+.arm{border:1px solid #9ff4d0;background:linear-gradient(180deg,#2fd3ad,#13977e)}
+.stop{border:1px solid #ffaaa3;background:linear-gradient(180deg,#f97066,#c62f27)}
+.toast{position:fixed;left:50%;top:56px;transform:translateX(-50%);background:#8e3d37;color:#fff;padding:6px 12px;border-radius:6px;font-size:12px;z-index:5;display:none}
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="brand">HEAVY PUNCH</div>
+  <div class="pills">
+    <div id="link" class="pill bad">NO LINK</div>
+    <div id="state" class="pill">DISARMED</div>
+    <div id="vbat" class="pill">-- V</div>
+  </div>
+</div>
+<div id="toast" class="toast"></div>
+<main class="wrap">
+  <section id="boxL" class="leverBox off">
+    <div class="label">LEFT TRACK</div>
+    <div id="valueL" class="value">0%</div>
+    <div id="slotL" class="slot"><div class="scale"></div><div class="zero"></div><div id="knobL" class="knob">L</div></div>
+    <div class="meter"><div id="fillL" class="fill"></div></div>
+    <div class="actual">pwm <span id="actL">0</span></div>
+  </section>
+  <section id="boxR" class="leverBox off">
+    <div class="label">RIGHT TRACK</div>
+    <div id="valueR" class="value">0%</div>
+    <div id="slotR" class="slot"><div class="scale"></div><div class="zero"></div><div id="knobR" class="knob">R</div></div>
+    <div class="meter"><div id="fillR" class="fill"></div></div>
+    <div class="actual">pwm <span id="actR">0</span></div>
+  </section>
+</main>
+<div class="bar">
+  <button id="arm" class="arm" disabled>ARM</button>
+  <button id="stop" class="stop">STOP</button>
+</div>
+<script>
+(function(){
+var ws=null,L=0,R=0,seq=0,lastSent='',lastStatus=0,state='DISARMED',owner=false;
+var $=function(id){return document.getElementById(id)};
+var linkEl=$('link'),stateEl=$('state'),vbatEl=$('vbat'),armBtn=$('arm'),toastEl=$('toast');
+var toastTimer=null;
+
+function toast(msg){toastEl.textContent=msg;toastEl.style.display='block';clearTimeout(toastTimer);toastTimer=setTimeout(function(){toastEl.style.display='none'},2500)}
+function send(msg){if(ws&&ws.readyState===1)ws.send(msg)}
+function armed(){return owner&&(state==='ARMED'||state==='RUNNING')}
+function linked(){return Date.now()-lastStatus<500}
+
+function sendFrame(force){
+  if(!armed())return;
+  var body=L+':'+R;
+  if(force||body!==lastSent){seq=(seq+1)>>>0;send('c:'+seq+':'+body);lastSent=body}
+}
+
+function draw(side,val){
+  var slot=$('slot'+side),knob=$('knob'+side),value=$('value'+side),fill=$('fill'+side);
+  var h=slot.clientHeight,kh=54,mid=(h-kh)/2,range=mid-2;
+  knob.style.top=(mid-(val/100)*range)+'px';
+  value.textContent=val+'%';
+  fill.style.width=Math.abs(val)+'%';
+  fill.style.background=val>=0?'#25c2a0':'#ffb020';
+}
+
+function zeroLevers(){L=0;R=0;draw('L',0);draw('R',0);lastSent=''}
+
+function bind(side){
+  var slot=$('slot'+side),active=false;
+  function setY(y){
+    if(!armed())return;
+    var r=slot.getBoundingClientRect(),mid=r.top+r.height/2;
+    var pct=Math.round(((mid-y)/(r.height/2))*100);
+    pct=pct<-100?-100:pct>100?100:pct;
+    if(side==='L')L=pct;else R=pct;
+    draw(side,pct);sendFrame(false);
+  }
+  function release(){active=false;if(side==='L')L=0;else R=0;draw(side,0);sendFrame(true)}
+  slot.addEventListener('pointerdown',function(e){active=true;slot.setPointerCapture(e.pointerId);setY(e.clientY)});
+  slot.addEventListener('pointermove',function(e){if(active)setY(e.clientY)});
+  slot.addEventListener('pointerup',release);
+  slot.addEventListener('pointercancel',release);
+  slot.addEventListener('lostpointercapture',release);
+}
+
+function allStop(){zeroLevers();send('stop')}
+
+function render(){
+  var ok=linked();
+  linkEl.textContent=ok?'LINK OK':'NO LINK';
+  linkEl.className='pill '+(ok?'ok':'bad');
+  stateEl.textContent=state+(owner?'':' (view)');
+  stateEl.className='pill '+(state==='RUNNING'?'run':state==='ARMED'?'ok':state==='FAULT'?'bad':'');
+  var on=ok&&armed();
+  $('boxL').className='leverBox'+(on?'':' off');
+  $('boxR').className='leverBox'+(on?'':' off');
+  armBtn.disabled=!ok||(armed())||(state==='FAULT');
+  armBtn.textContent=state==='FAULT'?'FAULT: PRESS STOP':(armed()?'ARMED':'ARM');
+  if(!on&&(L!==0||R!==0))zeroLevers();
+}
+
+function onMessage(ev){
+  var m=String(ev.data);
+  if(m.indexOf('s:')===0){
+    var p=m.split(':');
+    lastStatus=Date.now();
+    state=p[1]||'DISARMED';
+    $('actL').textContent=p[2]||'0';
+    $('actR').textContent=p[3]||'0';
+    var mv=parseInt(p[4]||'0',10);
+    vbatEl.textContent=mv>0?(mv/1000).toFixed(2)+' V':'-- V';
+    vbatEl.className='pill'+(p[5]==='lowbat'?' warn':'');
+    owner=p[6]==='1';
+    if(state==='FAULT'&&p[5])stateEl.title=p[5];
+    render();
+  }else if(m.indexOf('err:')===0){toast(m.slice(4))}
+  else if(m.indexOf('ok:')===0){toast(m.slice(3))}
+}
+
+function connect(){
+  ws=new WebSocket('ws://'+location.host+'/ws');
+  ws.onmessage=onMessage;
+  ws.onclose=function(){lastStatus=0;owner=false;render();setTimeout(connect,700)};
+  ws.onerror=function(){lastStatus=0;render()};
+}
+
+window.addEventListener('load',function(){
+  draw('L',0);draw('R',0);bind('L');bind('R');connect();
+  armBtn.addEventListener('pointerdown',function(e){e.preventDefault();send('arm')});
+  $('stop').addEventListener('pointerdown',function(e){e.preventDefault();allStop()});
+  window.addEventListener('blur',allStop);
+  document.addEventListener('visibilitychange',function(){if(document.hidden)allStop()});
+  setInterval(function(){sendFrame(true)},80);
+  setInterval(render,200);
+});
+})();
+</script>
+</body>
+</html>

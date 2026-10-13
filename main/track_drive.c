@@ -4,7 +4,7 @@
 #include "driver/ledc.h"
 #include "esp_check.h"
 #include "esp_log.h"
-#include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
 
 #include "track_math.h"
 
@@ -24,12 +24,19 @@
 
 static const char *TAG = "track_drive";
 
-static int16_t left_target_pwm;
-static int16_t right_target_pwm;
-static int16_t left_current_pwm;
-static int16_t right_current_pwm;
-static int64_t last_command_us;
-static int64_t last_update_us;
+static portMUX_TYPE s_lock = portMUX_INITIALIZER_UNLOCKED;
+
+/* Protected by s_lock. */
+static int16_t s_left_target;
+static int16_t s_right_target;
+static bool s_braked = true;
+static bool s_fault;
+static bool s_invert_left;
+static bool s_invert_right;
+
+/* Only touched by the task that calls track_drive_update(). */
+static int16_t s_left_current;
+static int16_t s_right_current;
 
 static void write_pwm(ledc_channel_t channel, int16_t pwm) {
   const uint32_t duty = (uint32_t)(pwm < 0 ? -pwm : pwm);
@@ -37,7 +44,11 @@ static void write_pwm(ledc_channel_t channel, int16_t pwm) {
   ledc_update_duty(PWM_MODE, channel);
 }
 
-static void write_motor(gpio_num_t in1, gpio_num_t in2, ledc_channel_t channel, int16_t pwm) {
+static void write_motor(gpio_num_t in1, gpio_num_t in2, ledc_channel_t channel, int16_t pwm,
+                        bool invert) {
+  if (invert) {
+    pwm = (int16_t)-pwm;
+  }
   if (pwm > 0) {
     gpio_set_level(in1, 1);
     gpio_set_level(in2, 0);
@@ -51,10 +62,13 @@ static void write_motor(gpio_num_t in1, gpio_num_t in2, ledc_channel_t channel, 
   write_pwm(channel, pwm);
 }
 
-static void brake_motor(gpio_num_t in1, gpio_num_t in2, ledc_channel_t channel) {
-  gpio_set_level(in1, 1);
-  gpio_set_level(in2, 1);
-  write_pwm(channel, 0);
+static void write_brake_outputs(void) {
+  gpio_set_level(AIN1, 1);
+  gpio_set_level(AIN2, 1);
+  gpio_set_level(BIN1, 1);
+  gpio_set_level(BIN2, 1);
+  write_pwm(PWM_LEFT_CHANNEL, 0);
+  write_pwm(PWM_RIGHT_CHANNEL, 0);
 }
 
 esp_err_t track_drive_init(void) {
@@ -76,65 +90,98 @@ esp_err_t track_drive_init(void) {
   };
   ESP_RETURN_ON_ERROR(ledc_timer_config(&timer_conf), TAG, "ledc timer config failed");
 
-  ledc_channel_config_t left_channel = {
-      .gpio_num = PWMA,
-      .speed_mode = PWM_MODE,
-      .channel = PWM_LEFT_CHANNEL,
-      .intr_type = LEDC_INTR_DISABLE,
-      .timer_sel = PWM_TIMER,
-      .duty = 0,
-      .hpoint = 0,
+  const ledc_channel_config_t channels[] = {
+      {.gpio_num = PWMA, .speed_mode = PWM_MODE, .channel = PWM_LEFT_CHANNEL,
+       .intr_type = LEDC_INTR_DISABLE, .timer_sel = PWM_TIMER, .duty = 0, .hpoint = 0},
+      {.gpio_num = PWMB, .speed_mode = PWM_MODE, .channel = PWM_RIGHT_CHANNEL,
+       .intr_type = LEDC_INTR_DISABLE, .timer_sel = PWM_TIMER, .duty = 0, .hpoint = 0},
   };
-  ESP_RETURN_ON_ERROR(ledc_channel_config(&left_channel), TAG, "left ledc config failed");
+  for (size_t i = 0; i < sizeof(channels) / sizeof(channels[0]); i++) {
+    ESP_RETURN_ON_ERROR(ledc_channel_config(&channels[i]), TAG, "ledc channel config failed");
+  }
 
-  ledc_channel_config_t right_channel = {
-      .gpio_num = PWMB,
-      .speed_mode = PWM_MODE,
-      .channel = PWM_RIGHT_CHANNEL,
-      .intr_type = LEDC_INTR_DISABLE,
-      .timer_sel = PWM_TIMER,
-      .duty = 0,
-      .hpoint = 0,
-  };
-  ESP_RETURN_ON_ERROR(ledc_channel_config(&right_channel), TAG, "right ledc config failed");
-
-  track_drive_stop();
+  track_drive_brake();
   ESP_LOGI(TAG, "initialized: left pwm=%d in1=%d in2=%d, right pwm=%d in1=%d in2=%d",
            PWMA, AIN1, AIN2, PWMB, BIN1, BIN2);
   return ESP_OK;
 }
 
-void track_drive_set_percent(int16_t left_pct, int16_t right_pct) {
-  left_target_pwm = track_percent_to_pwm(left_pct);
-  right_target_pwm = track_percent_to_pwm(right_pct);
-  last_command_us = esp_timer_get_time();
+void track_drive_set_invert(bool invert_left, bool invert_right) {
+  portENTER_CRITICAL(&s_lock);
+  s_invert_left = invert_left;
+  s_invert_right = invert_right;
+  portEXIT_CRITICAL(&s_lock);
 }
 
-void track_drive_stop(void) {
-  left_target_pwm = 0;
-  right_target_pwm = 0;
-  left_current_pwm = 0;
-  right_current_pwm = 0;
-  last_command_us = esp_timer_get_time();
-  brake_motor(AIN1, AIN2, PWM_LEFT_CHANNEL);
-  brake_motor(BIN1, BIN2, PWM_RIGHT_CHANNEL);
+void track_drive_set_target(int16_t left_pwm, int16_t right_pwm) {
+  portENTER_CRITICAL(&s_lock);
+  if (!s_fault) {
+    s_left_target = left_pwm;
+    s_right_target = right_pwm;
+    s_braked = false;
+  }
+  portEXIT_CRITICAL(&s_lock);
 }
 
-void track_drive_update(void) {
-  const int64_t now = esp_timer_get_time();
-  if (now - last_update_us < TRACK_DRIVE_UPDATE_INTERVAL_MS * 1000LL) {
+void track_drive_brake(void) {
+  portENTER_CRITICAL(&s_lock);
+  s_left_target = 0;
+  s_right_target = 0;
+  s_braked = true;
+  portEXIT_CRITICAL(&s_lock);
+  write_brake_outputs();
+}
+
+void track_drive_fault_brake(void) {
+  portENTER_CRITICAL(&s_lock);
+  s_left_target = 0;
+  s_right_target = 0;
+  s_braked = true;
+  s_fault = true;
+  portEXIT_CRITICAL(&s_lock);
+  write_brake_outputs();
+}
+
+void track_drive_clear_fault(void) {
+  portENTER_CRITICAL(&s_lock);
+  s_fault = false;
+  portEXIT_CRITICAL(&s_lock);
+}
+
+bool track_drive_fault_latched(void) {
+  portENTER_CRITICAL(&s_lock);
+  const bool fault = s_fault;
+  portEXIT_CRITICAL(&s_lock);
+  return fault;
+}
+
+void track_drive_update(uint8_t slew_step) {
+  portENTER_CRITICAL(&s_lock);
+  const bool hold_brake = s_braked || s_fault;
+  const int16_t left_target = s_left_target;
+  const int16_t right_target = s_right_target;
+  const bool invert_left = s_invert_left;
+  const bool invert_right = s_invert_right;
+  portEXIT_CRITICAL(&s_lock);
+
+  if (hold_brake) {
+    s_left_current = 0;
+    s_right_current = 0;
+    write_brake_outputs();
     return;
   }
-  last_update_us = now;
 
-  if (now - last_command_us > TRACK_COMMAND_TIMEOUT_MS * 1000LL) {
-    left_target_pwm = 0;
-    right_target_pwm = 0;
+  s_left_current = track_approach_with_step(s_left_current, left_target, slew_step);
+  s_right_current = track_approach_with_step(s_right_current, right_target, slew_step);
+  write_motor(AIN1, AIN2, PWM_LEFT_CHANNEL, s_left_current, invert_left);
+  write_motor(BIN1, BIN2, PWM_RIGHT_CHANNEL, s_right_current, invert_right);
+}
+
+void track_drive_get_actual(int16_t *left_pwm, int16_t *right_pwm) {
+  if (left_pwm) {
+    *left_pwm = s_left_current;
   }
-
-  left_current_pwm = track_approach_with_step(left_current_pwm, left_target_pwm, TRACK_SLEW_STEP);
-  right_current_pwm = track_approach_with_step(right_current_pwm, right_target_pwm, TRACK_SLEW_STEP);
-
-  write_motor(AIN1, AIN2, PWM_LEFT_CHANNEL, left_current_pwm);
-  write_motor(BIN1, BIN2, PWM_RIGHT_CHANNEL, right_current_pwm);
+  if (right_pwm) {
+    *right_pwm = s_right_current;
+  }
 }

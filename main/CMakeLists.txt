@@ -1,9 +1,26 @@
 idf_component_register(
     SRCS
         "app_main.c"
+        "track_battery.c"
+        "track_config.c"
+        "track_config_store.c"
+        "track_control.c"
         "track_drive.c"
         "track_math.c"
+        "track_safety.c"
+        "track_watchdog.c"
         "web_server.c"
     INCLUDE_DIRS
         "."
+    EMBED_TXTFILES
+        "web_ui.html"
+    REQUIRES
+        driver
+        esp_adc
+        esp_event
+        esp_http_server
+        esp_netif
+        esp_timer
+        esp_wifi
+        nvs_flash
 )

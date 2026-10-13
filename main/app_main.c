@@ -1,14 +1,17 @@
+#include <string.h>
+
 #include "esp_check.h"
 #include "esp_event.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "lwip/ip4_addr.h"
 #include "nvs_flash.h"
 
+#include "track_battery.h"
+#include "track_control.h"
 #include "track_drive.h"
+#include "track_watchdog.h"
 #include "web_server.h"
 
 #define AP_SSID "HeavyPunch-Track"
@@ -17,14 +20,6 @@
 #define AP_MAX_CONNECTIONS 2
 
 static const char *TAG = "heavy_punch";
-
-static void drive_task(void *arg) {
-  (void)arg;
-  while (true) {
-    track_drive_update();
-    vTaskDelay(pdMS_TO_TICKS(5));
-  }
-}
 
 static esp_err_t wifi_init_ap(void) {
   ESP_RETURN_ON_ERROR(esp_netif_init(), TAG, "netif init failed");
@@ -45,17 +40,14 @@ static esp_err_t wifi_init_ap(void) {
   wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
   ESP_RETURN_ON_ERROR(esp_wifi_init(&cfg), TAG, "wifi init failed");
 
-  wifi_config_t wifi_config = {
-      .ap = {
-          .ssid = AP_SSID,
-          .ssid_len = sizeof(AP_SSID) - 1,
-          .channel = AP_CHANNEL,
-          .password = AP_PASSWORD,
-          .max_connection = AP_MAX_CONNECTIONS,
-          .authmode = WIFI_AUTH_WPA_WPA2_PSK,
-          .pmf_cfg = {.required = false},
-      },
-  };
+  wifi_config_t wifi_config = {0};
+  strlcpy((char *)wifi_config.ap.ssid, AP_SSID, sizeof(wifi_config.ap.ssid));
+  strlcpy((char *)wifi_config.ap.password, AP_PASSWORD, sizeof(wifi_config.ap.password));
+  wifi_config.ap.ssid_len = strlen(AP_SSID);
+  wifi_config.ap.channel = AP_CHANNEL;
+  wifi_config.ap.max_connection = AP_MAX_CONNECTIONS;
+  wifi_config.ap.authmode = WIFI_AUTH_WPA_WPA2_PSK;
+  wifi_config.ap.pmf_cfg.required = false;
 
   ESP_RETURN_ON_ERROR(esp_wifi_set_mode(WIFI_MODE_AP), TAG, "wifi mode failed");
   ESP_RETURN_ON_ERROR(esp_wifi_set_config(WIFI_IF_AP, &wifi_config), TAG, "wifi config failed");
@@ -72,9 +64,13 @@ void app_main(void) {
   }
   ESP_ERROR_CHECK(ret);
 
+  /* Motors are braked before anything else can run. */
   ESP_ERROR_CHECK(track_drive_init());
+  ESP_ERROR_CHECK(track_watchdog_init());
+  /* Battery sensing is optional: a failure only disables the reading. */
+  (void)track_battery_init();
+
+  ESP_ERROR_CHECK(track_control_start());
   ESP_ERROR_CHECK(wifi_init_ap());
   ESP_ERROR_CHECK(web_server_start());
-
-  xTaskCreate(drive_task, "drive_task", 3072, NULL, 12, NULL);
 }
